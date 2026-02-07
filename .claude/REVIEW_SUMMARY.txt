@@ -1,0 +1,332 @@
+================================================================================
+                    PHASE 6 CODE REVIEW - EXECUTIVE SUMMARY
+================================================================================
+
+Project: Crypto Scalping Bot - Phase 6 (Signal Generation, Execution, Risk Mgmt)
+Review Date: 2026-02-06
+Reviewer: Code Review Analysis
+Codebase: /Users/hoangta/projects/quant
+
+================================================================================
+                              FINDINGS OVERVIEW
+================================================================================
+
+Total Issues Found: 15
+  - CRITICAL:  1  (Blocks live trading)
+  - HIGH:      6  (Must fix before deployment)
+  - MEDIUM:    5  (Should fix before production)
+  - LOW:       3  (Nice to have)
+
+Files Reviewed: 4
+  1. internal/strategy/signal.go      - Signal generation & sentiment filters
+  2. internal/execution/engine.go     - Order execution & trade recording
+  3. internal/risk/manager.go         - Position sizing & risk limits
+  4. internal/model/predictor.go      - ONNX model inference
+
+================================================================================
+                           CRITICAL ISSUES (1)
+================================================================================
+
+[CRITICAL] Issue #1: Missing Fee & Slippage Deduction in PnL
+  File: internal/execution/engine.go, Lines 154-158
+  
+  PROBLEM:
+    PnL calculation doesn't account for trading fees or slippage:
+      pnl = (order.FilledPrice - entryPrice) * size
+    
+    Engine has FeePercent and SlippageBP config but never uses them.
+  
+  IMPACT:
+    - ALL reported PnL values are INFLATED by 0.5-2%+ per trade
+    - Backtesting shows +5% returns when actual is +2.8%
+    - Risk management decisions based on false equity
+    - Example: $100k account, 2 trades/day, 0.1% fees = $2 daily loss ignored
+  
+  SEVERITY: BLOCKS LIVE TRADING
+    If deployed without fix, bot will overestimate profitability and
+    take larger positions than appropriate for risk profile.
+  
+  FIX: Add fee/slippage deduction (see PHASE6_FIXES.md Issue #1)
+    netPnL = (priceDiff * size) - entryFees - exitFees - exitSlippage
+  
+  EFFORT: 10 minutes
+
+================================================================================
+                            HIGH PRIORITY (6)
+================================================================================
+
+[HIGH] Issue #2: Position State Race Condition
+  File: engine.go (Lines 94-126) + manager.go (Lines 115-135)
+  
+  PROBLEM:
+    Engine and Manager track positions independently with no synchronization.
+    Two signals could both pass CanOpenPosition() and open duplicate positions.
+  
+  EXAMPLE:
+    t=100ms: Signal A arrives, passes CanOpenPosition() check
+    t=101ms: Signal B arrives, also passes check (A hasn't updated state yet)
+    t=102ms: Engine executes order for A, Manager registers position
+    t=103ms: Engine executes order for B, but position already exists!
+  
+  IMPACT:
+    - Overlapping positions on same symbol
+    - Corrupted position state
+    - Potential liquidation risk
+  
+  FIX: Make OpenPosition() method synchronous (see Issue #2 in PHASE6_FIXES.md)
+       1. Call rm.CanOpenPosition() first
+       2. Execute order
+       3. Call rm.OpenPosition() - atomic registration
+  
+  EFFORT: 30 minutes
+
+---
+
+[HIGH] Issue #3: Model Inference Data Race
+  File: predictor.go, Lines 76-103
+  
+  PROBLEM:
+    p.inputTensor.GetData() returns pointer to shared buffer.
+    Multiple goroutines can write to same tensor simultaneously.
+    ONNX may not be thread-safe for concurrent inference.
+  
+  IMPACT:
+    - Corrupt predictions (feature from goroutine A mixed with B)
+    - Silent failures - no error, just wrong probabilities
+    - Hard to debug: intermittent issues, varies with timing
+  
+  FIX: Keep mutex but validate output, ensure single accessor (see Issue #3)
+  
+  EFFORT: 15 minutes
+
+---
+
+[HIGH] Issue #4: Order.FilledPrice Undefined
+  File: engine.go, Lines 155, 157, 164
+  
+  PROBLEM:
+    Code references order.FilledPrice for PnL calculation,
+    but never validates it's actually set by executor.
+    If executor returns order with FilledPrice=0, PnL becomes 0.
+  
+  IMPACT:
+    - Silent trade loss: trade marked as break-even when it lost money
+    - Position sizing affected: equity tracking wrong
+  
+  FIX: Validate order was accepted before using (add checks in OpenPosition)
+  
+  EFFORT: 10 minutes
+
+---
+
+[HIGH] Issue #5: Daily Loss Limit Race Condition
+  File: manager.go, Lines 105-110
+  
+  PROBLEM:
+    checkDailyReset() is called while holding RLock but modifies state:
+    
+      func (m *Manager) CanOpenPosition() {
+          m.mu.RLock()          // Read lock
+          defer m.mu.RUnlock()
+          m.checkDailyReset()   // RACE: writes dailyPnL, dailyResetTime
+      }
+  
+    Also called from GetDailyPnL() with RLock.
+    Multiple goroutines can reset simultaneously → lost updates.
+  
+  IMPACT:
+    - Daily loss limit not properly enforced
+    - Could trade past daily loss cap
+    - PnL tracking inconsistent
+  
+  FIX: Use exclusive Lock (not RLock) in CanOpenPosition and GetDailyPnL
+       This prevents concurrent resets.
+  
+  EFFORT: 5 minutes
+
+---
+
+[HIGH] Issue #6: GetAllPositions Returns Unsafe Pointers
+  File: manager.go, Lines 173-182
+  
+  PROBLEM:
+    Returns pointers to internal Position structs.
+    Caller can modify without going through manager:
+    
+      positions := manager.GetAllPositions()
+      positions[symbol].Size = 999  // Corrupts internal state!
+  
+  IMPACT:
+    - Breaks encapsulation
+    - Can corrupt position data
+    - Inconsistent state
+  
+  FIX: Return deep copies (copy Position value, not pointer)
+  
+  EFFORT: 5 minutes
+
+================================================================================
+                         MEDIUM PRIORITY (5)
+================================================================================
+
+[MEDIUM] Issue #7: Position Sizing Math Fragile
+  File: manager.go, Lines 65-68
+  
+  ISSUE: Logic for handling both LONG/SHORT stop distances is hard to follow
+  FIX: Use math.Abs() explicitly, add floating point tolerance
+  EFFORT: 10 minutes
+
+---
+
+[MEDIUM] Issue #8: Missing Signal Validation
+  File: signal.go, Lines 79-122
+  
+  ISSUE:
+    - No check that prediction probs are in [0,1] range
+    - No check that probs sum to ~1.0
+    - No check for NaN/Inf in prices
+    - Stop loss could be negative
+  
+  EXAMPLE:
+    If model returns [2.0, -0.5, 0.5], signal is accepted.
+    When validated in risk manager, position sizing fails.
+  
+  FIX: Add ValidatePrediction() and ValidateFeatureVector() (see Issue #8)
+  EFFORT: 20 minutes
+
+---
+
+[MEDIUM] Issue #9: No Order Validation After Placement
+  File: engine.go, Lines 111-119
+  
+  ISSUE:
+    Doesn't check if order was actually accepted/filled.
+    Partial fills tracked as full fills.
+    Rejected orders tracked as valid.
+  
+  FIX: Validate order.Status and order.FilledSize before tracking
+  EFFORT: 10 minutes
+
+---
+
+[MEDIUM] Issue #10: Resource Cleanup Early Return
+  File: predictor.go, Lines 105-122
+  
+  ISSUE:
+    Close() method returns early on errors, preventing full cleanup:
+    
+      if err := p.session.Destroy(); err != nil {
+          return err  // inputTensor/outputTensor never destroyed!
+      }
+  
+  IMPACT: Resource leak if session destroy fails
+  FIX: Track all errors, attempt full cleanup (see Issue #10)
+  EFFORT: 10 minutes
+
+================================================================================
+                          LOW PRIORITY (3)
+================================================================================
+
+[LOW] Issue #11: Config field naming clarity
+[LOW] Issue #12: ProfitFactor undefined for perfect trades
+[LOW] Issue #13: Equity missing fees (secondary to Issue #1)
+
+Details in PHASE6_CODE_REVIEW.md
+
+================================================================================
+                         PRIORITY ACTION PLAN
+================================================================================
+
+PHASE A - BEFORE LIVE TRADING (Do First)
+  
+  1. [CRITICAL] Fix Issue #1 - Fee/slippage deduction        [ 10 min ]
+  2. [HIGH] Fix Issue #2 - Position race condition           [ 30 min ]
+  3. [HIGH] Fix Issue #5 - Daily loss reset race             [  5 min ]
+  4. [HIGH] Fix Issue #6 - GetAllPositions safety            [  5 min ]
+  
+  Total: ~50 minutes
+  
+  Why: These prevent data corruption and ensure correct PnL/risk tracking.
+       Live trading will fail or be unsafe without these.
+
+---
+
+PHASE B - BEFORE EXTENDED TESTING (Do Second)
+
+  5. [HIGH] Fix Issue #3 - Model inference thread-safety     [ 15 min ]
+  6. [HIGH] Fix Issue #4 - Order validation                  [ 10 min ]
+  7. [MEDIUM] Fix Issue #8 - Signal validation               [ 20 min ]
+  8. [MEDIUM] Fix Issue #9 - Order placement validation      [ 10 min ]
+  
+  Total: ~55 minutes
+  
+  Why: These add robustness and prevent silent failures.
+       Improves reliability for extended testing.
+
+---
+
+PHASE C - OPTIONAL (Nice to Have)
+
+  9. [MEDIUM] Fix Issue #7 - Math clarity                    [ 10 min ]
+ 10. [MEDIUM] Fix Issue #10 - Cleanup error handling         [ 10 min ]
+ 11. [LOW] Fix Issue #11-13 - Polish                         [ 15 min ]
+  
+  Total: ~35 minutes
+
+---
+
+TESTING REQUIRED:
+
+  After all fixes, run:
+    go test -race ./internal/...
+    go vet ./internal/...
+    
+  Backtest validation:
+    - Verify PnL with/without fees matches
+    - Confirm daily loss limits enforced
+    - Check position state consistency
+
+================================================================================
+                            DETAILED REPORTS
+================================================================================
+
+Two detailed reports generated:
+
+1. PHASE6_CODE_REVIEW.md
+   - Full analysis of all 15 issues
+   - Line numbers and code examples
+   - Root cause analysis
+   - Impact assessment
+   - Recommendations
+
+2. PHASE6_FIXES.md
+   - Before/after code for each fix
+   - Implementation guidance
+   - Test checklist
+   - Runnable code snippets
+
+================================================================================
+                         RECOMMENDATIONS
+================================================================================
+
+SHORT TERM:
+  ✓ Apply all Phase A fixes (50 min) before any live trading
+  ✓ Run -race flag tests after fixes
+  ✓ Add unit tests for critical paths (PnL, position sizing, risk limits)
+
+MEDIUM TERM:
+  ✓ Apply Phase B fixes for stability
+  ✓ Add integration tests for position lifecycle (open → fill → close)
+  ✓ Validate backtesting matches live execution
+
+LONG TERM:
+  ✓ Implement comprehensive input validation across all modules
+  ✓ Add structured logging to trace execution flow
+  ✓ Consider using channels instead of shared memory for goroutine coordination
+
+================================================================================
+
+Files to read for implementation:
+  - /Users/hoangta/projects/quant/.claude/PHASE6_CODE_REVIEW.md (detailed analysis)
+  - /Users/hoangta/projects/quant/.claude/PHASE6_FIXES.md (code examples)
+

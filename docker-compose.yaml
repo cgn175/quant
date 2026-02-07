@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: quant-bot
+    restart: unless-stopped
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./models:/app/models:ro
+    environment:
+      - QUANT_EXCHANGE_API_KEY=${EXCHANGE_API_KEY}
+      - QUANT_EXCHANGE_API_SECRET=${EXCHANGE_API_SECRET}
+    depends_on:
+      - sentiment
+
+  sentiment:
+    build:
+      context: ./sentiment
+      dockerfile: Dockerfile
+    container_name: quant-sentiment
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - SENTIMENT_REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - SENTIMENT_REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - SENTIMENT_TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: quant-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

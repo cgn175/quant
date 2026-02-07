@@ -1,0 +1,42 @@
+mode: paper
+
+exchange:
+  name: binance
+  testnet: false
+  api_key: ""
+  api_secret: ""
+
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+
+bar_size: "1m"
+
+sentiment:
+  url: http://localhost:8000
+  poll_interval_seconds: 60
+  sentiment_threshold_long: 0.3
+  sentiment_threshold_short: -0.3
+
+risk:
+  max_risk_per_trade_pct: 1.0
+  max_daily_loss_pct: 3.0
+  max_open_positions: 3
+  max_leverage: 2.0
+
+model:
+  path: models/xgboost_model.onnx
+  runtime_lib_path: ""
+  threshold_up: 0.6
+  threshold_down: 0.6
+
+execution:
+  use_limit_orders: false
+  slippage_bp: 5.0
+
+monitoring:
+  prometheus_port: 9090
+
+alerts:
+  telegram_bot_token: ""
+  telegram_chat_id: 0
