@@ -1,7 +1,10 @@
-import praw
+import asyncio
 from datetime import datetime, timezone
-from .base import BaseFetcher, Post
+
+import praw
 from config import get_settings
+
+from .base import BaseFetcher, Post
 
 SYMBOL_KEYWORDS = {
     "BTCUSDT": ["bitcoin", "btc", "$btc"],
@@ -25,17 +28,20 @@ class RedditFetcher(BaseFetcher):
                 user_agent=settings.reddit_user_agent,
             )
 
-    async def fetch(self, symbol: str, limit: int = 100) -> list[Post]:
+    def _fetch_sync(self, symbol: str, limit: int) -> list[Post]:
+        """Synchronous fetch using praw. Meant to be called via
+        asyncio.to_thread so the event loop is never blocked."""
         if not self.reddit:
             return []
 
         keywords = SYMBOL_KEYWORDS.get(symbol, [symbol.lower().replace("usdt", "")])
-        posts = []
+        posts: list[Post] = []
+        per_sub_limit = max(1, limit // len(SUBREDDITS))
 
         for subreddit_name in SUBREDDITS:
             try:
                 subreddit = self.reddit.subreddit(subreddit_name)
-                for submission in subreddit.hot(limit=limit // len(SUBREDDITS)):
+                for submission in subreddit.hot(limit=per_sub_limit):
                     text = f"{submission.title} {submission.selftext}".lower()
                     if any(kw in text for kw in keywords):
                         posts.append(
@@ -53,3 +59,16 @@ class RedditFetcher(BaseFetcher):
                 continue
 
         return posts
+
+    async def fetch(self, symbol: str, limit: int = 100) -> list[Post]:
+        """Fetch posts without blocking the async event loop.
+
+        praw is a synchronous library so all Reddit API calls are
+        offloaded to a thread via ``asyncio.to_thread``.  This keeps the
+        FastAPI server responsive while the (potentially slow) Reddit
+        requests are in flight.
+        """
+        if not self.reddit:
+            return []
+
+        return await asyncio.to_thread(self._fetch_sync, symbol, limit)

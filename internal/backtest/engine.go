@@ -2,13 +2,16 @@ package backtest
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/features"
 	"github.com/cgn175/quant-bot/internal/model"
 	"github.com/cgn175/quant-bot/internal/risk"
+	"github.com/cgn175/quant-bot/internal/sentiment"
 	"github.com/cgn175/quant-bot/internal/strategy"
 )
 
@@ -23,20 +26,40 @@ type Bar struct {
 	Volume    float64
 }
 
+// toCandle converts a Bar to an exchange.Candle so we can reuse the
+// indicator functions in features/indicators.go which operate on
+// []exchange.Candle.
+func (b *Bar) toCandle() exchange.Candle {
+	return exchange.Candle{
+		Symbol:    b.Symbol,
+		OpenTime:  b.Timestamp,
+		CloseTime: b.Timestamp.Add(time.Minute), // assume 1m bars
+		Open:      b.Open,
+		High:      b.High,
+		Low:       b.Low,
+		Close:     b.Close,
+		Volume:    b.Volume,
+	}
+}
+
 // Backtest engine replays historical data and simulates trading
 type Engine struct {
 	mu              sync.RWMutex
-	bars            map[string][]*Bar          // symbol -> sorted bars
-	featureBuilder  *features.Builder          // for computing TA indicators
-	strategyEngine  *strategy.Strategy         // signal generation
-	riskManager     *risk.Manager              // position sizing + risk
-	predictor       *model.Predictor           // ML model
-	symbolOrder     []string                   // for deterministic processing
-	currentIdx      map[string]int             // current index per symbol
-	trades          []*Trade                   // closed trades
-	openPositions   map[string]*OpenPosition   // open positions during backtest
+	bars            map[string][]*Bar        // symbol -> sorted bars
+	featureBuilder  *features.Builder        // for computing TA indicators
+	strategyEngine  *strategy.Strategy       // signal generation
+	riskManager     *risk.Manager            // position sizing + risk
+	predictor       *model.Predictor         // ML model
+	symbolOrder     []string                 // for deterministic processing
+	currentIdx      map[string]int           // current index per symbol
+	trades          []*Trade                 // closed trades
+	openPositions   map[string]*OpenPosition // open positions during backtest
 	executionConfig ExecutionConfig
 	stats           BacktestStats
+
+	// Optional historical sentiment data keyed by symbol.
+	// If nil, sentiment features are zero (placeholder).
+	sentimentData map[string]*sentiment.SentimentData
 }
 
 // ExecutionConfig controls how orders are simulated
@@ -49,7 +72,7 @@ type ExecutionConfig struct {
 // OpenPosition tracks an open position during backtest
 type OpenPosition struct {
 	Symbol     string
-	Side       string    // "LONG" or "SHORT"
+	Side       string // "LONG" or "SHORT"
 	EntryPrice float64
 	EntryTime  time.Time
 	EntryBar   int
@@ -74,21 +97,21 @@ type Trade struct {
 
 // BacktestStats summarizes backtest results
 type BacktestStats struct {
-	StartTime          time.Time
-	EndTime            time.Time
-	InitialEquity      float64
-	FinalEquity        float64
-	TotalTrades        int
-	WinningTrades      int
-	LosingTrades       int
-	WinRate            float64
-	ProfitFactor       float64
-	GrossPnL           float64
-	NetPnL             float64
-	AvgPnL             float64
-	MaxDrawdown        float64
-	SharpeRatio        float64
-	TotalDaysTraded    int
+	StartTime       time.Time
+	EndTime         time.Time
+	InitialEquity   float64
+	FinalEquity     float64
+	TotalTrades     int
+	WinningTrades   int
+	LosingTrades    int
+	WinRate         float64
+	ProfitFactor    float64
+	GrossPnL        float64
+	NetPnL          float64
+	AvgPnL          float64
+	MaxDrawdown     float64
+	SharpeRatio     float64
+	TotalDaysTraded int
 }
 
 // NewEngine creates a new backtest engine
@@ -110,6 +133,14 @@ func NewEngine(
 		executionConfig: execConfig,
 		trades:          make([]*Trade, 0),
 	}
+}
+
+// SetSentimentData sets optional historical sentiment data to use during
+// backtesting instead of zero-valued placeholders.
+func (e *Engine) SetSentimentData(data map[string]*sentiment.SentimentData) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sentimentData = data
 }
 
 // AddBars adds historical candles for a symbol
@@ -169,6 +200,9 @@ func (e *Engine) Run() (*BacktestStats, error) {
 
 	e.mu.Unlock()
 
+	// Minimum bars needed for indicator warm-up (EMA-50 needs ~55 bars).
+	minWarmup := e.featureBuilder.MinCandles()
+
 	// Process each bar in time order
 	for barNum := 0; barNum < maxBarCount; barNum++ {
 		e.mu.Lock()
@@ -185,13 +219,13 @@ func (e *Engine) Run() (*BacktestStats, error) {
 			// Check for exit conditions (stop loss / take profit)
 			e.checkExitConditions(symbol, bar)
 
-			// Only generate new signals if we have enough history
-			if barNum < 20 {
-				continue // Skip first 20 bars for indicator warmup
+			// Only generate new signals after indicator warm-up
+			if barNum < minWarmup {
+				continue
 			}
 
-			// Build feature vector
-			fv := e.buildFeatureVector(symbol, bar, barNum, bars)
+			// Build feature vector using the proper indicator pipeline
+			fv := e.buildFeatureVector(symbol, bars, barNum)
 			if fv == nil {
 				continue
 			}
@@ -306,7 +340,8 @@ func (e *Engine) executeSignal(signal *strategy.Signal, bar *Bar) {
 	}
 
 	// Register in risk manager
-	riskAmount := bar.Close * size * (e.executionConfig.FeePercent / 100.0)
+	riskAmount := e.riskManager.GetEquity() * (e.executionConfig.FeePercent / 100.0)
+	riskAmount *= sizeMultiplier
 	e.riskManager.OpenPosition(symbol, side, bar.Close, size, signal.StopLoss, signal.TakeProfit, riskAmount)
 }
 
@@ -353,57 +388,50 @@ func (e *Engine) closeTrade(symbol string, pos *OpenPosition, exitPrice float64,
 	delete(e.openPositions, symbol)
 }
 
-// buildFeatureVector constructs a feature vector for the current bar
-func (e *Engine) buildFeatureVector(symbol string, bar *Bar, barNum int, bars []*Bar) *features.FeatureVector {
+// buildFeatureVector constructs a feature vector for the bar at index barNum
+// by converting the relevant slice of *Bar into []exchange.Candle and
+// delegating to the features.Builder which uses the proper indicator
+// implementations (EMA, RSI, Bollinger, MACD, LogReturn, VolumeRatio).
+//
+// This ensures backtested features match the live feature pipeline and the
+// Python training script.
+func (e *Engine) buildFeatureVector(symbol string, bars []*Bar, barNum int) *features.FeatureVector {
 	if e.featureBuilder == nil {
 		return nil
 	}
 
-	// For now, create a minimal feature vector
-	// In production, this would use the featureBuilder to compute indicators
-	fv := &features.FeatureVector{
-		Symbol:           symbol,
-		Timestamp:        bar.Timestamp,
-		Close:            bar.Close,
-		Open:             bar.Open,
-		High:             bar.High,
-		Low:              bar.Low,
-		Volume:           bar.Volume,
-		VolumeRatio:      1.0, // placeholder
-		SentimentScore1h: 0.0, // placeholder (would come from historical sentiment data)
-		SentimentScore24h: 0.0,
+	minCandles := e.featureBuilder.MinCandles()
+
+	// We need at least minCandles bars ending at barNum (inclusive).
+	if barNum+1 < minCandles {
+		return nil
 	}
 
-	// Compute basic indicators
-	if barNum >= 20 {
-		// EMA 5
-		fv.EMA5 = e.computeEMA(bars, barNum, 5)
-		fv.EMA9 = e.computeEMA(bars, barNum, 9)
-		fv.EMA21 = e.computeEMA(bars, barNum, 21)
-		fv.EMA50 = e.computeEMA(bars, barNum, 50)
+	// Convert the window of bars [start..barNum] into []exchange.Candle.
+	// We only need the last `minCandles` bars (plus a small margin for
+	// indicator warm-up); sending too many is fine but wasteful.
+	start := barNum + 1 - minCandles
+	if start < 0 {
+		start = 0
 	}
 
+	window := bars[start : barNum+1]
+	candles := make([]exchange.Candle, len(window))
+	for i, b := range window {
+		candles[i] = b.toCandle()
+	}
+
+	// Look up optional historical sentiment data for this symbol.
+	var sent *sentiment.SentimentData
+	if e.sentimentData != nil {
+		sent = e.sentimentData[symbol]
+	}
+
+	// Use the same Build() method that the live bot uses so features are
+	// computed identically (proper log returns, proper MACD signal line,
+	// correct feature count / order matching the Python training pipeline).
+	fv := e.featureBuilder.Build(candles, sent)
 	return fv
-}
-
-// computeEMA computes exponential moving average
-func (e *Engine) computeEMA(bars []*Bar, barNum int, period int) float64 {
-	if barNum < period-1 {
-		return 0
-	}
-
-	multiplier := 2.0 / float64(period+1)
-	var sma float64
-	for i := barNum - period + 1; i <= barNum; i++ {
-		sma += bars[i].Close
-	}
-	sma /= float64(period)
-
-	ema := sma
-	for i := barNum - period + 2; i <= barNum; i++ {
-		ema = bars[i].Close*multiplier + ema*(1-multiplier)
-	}
-	return ema
 }
 
 // computeStats computes final backtest statistics
@@ -417,32 +445,28 @@ func (e *Engine) computeStats() {
 
 	e.stats.TotalTrades = len(e.trades)
 
+	totalWins := 0.0
+	totalLosses := 0.0
+
 	for _, trade := range e.trades {
 		e.stats.GrossPnL += trade.GrossPnL
 		e.stats.NetPnL += trade.NetPnL
 
 		if trade.NetPnL > 0 {
 			e.stats.WinningTrades++
+			totalWins += trade.NetPnL
 		} else if trade.NetPnL < 0 {
 			e.stats.LosingTrades++
+			totalLosses -= trade.NetPnL // make positive
 		}
 	}
 
 	e.stats.WinRate = float64(e.stats.WinningTrades) / float64(e.stats.TotalTrades)
 
-	if e.stats.LosingTrades > 0 {
-		totalWins := 0.0
-		totalLosses := 0.0
-		for _, trade := range e.trades {
-			if trade.NetPnL > 0 {
-				totalWins += trade.NetPnL
-			} else if trade.NetPnL < 0 {
-				totalLosses -= trade.NetPnL
-			}
-		}
-		if totalLosses > 0 {
-			e.stats.ProfitFactor = totalWins / totalLosses
-		}
+	if e.stats.LosingTrades > 0 && totalLosses > 0 {
+		e.stats.ProfitFactor = totalWins / totalLosses
+	} else if e.stats.WinningTrades > 0 && e.stats.LosingTrades == 0 {
+		e.stats.ProfitFactor = math.Inf(1)
 	}
 
 	if e.stats.TotalTrades > 0 {
@@ -451,6 +475,9 @@ func (e *Engine) computeStats() {
 
 	// Compute max drawdown
 	e.stats.MaxDrawdown = e.computeMaxDrawdown()
+
+	// Compute Sharpe ratio (annualized, assuming 1-minute bars)
+	e.stats.SharpeRatio = e.computeSharpe()
 
 	// Days traded
 	if !e.stats.StartTime.IsZero() && !e.stats.EndTime.IsZero() {
@@ -473,13 +500,62 @@ func (e *Engine) computeMaxDrawdown() float64 {
 		if equity > peakEquity {
 			peakEquity = equity
 		}
-		dd := (peakEquity - equity) / peakEquity
-		if dd > maxDD {
-			maxDD = dd
+		if peakEquity > 0 {
+			dd := (peakEquity - equity) / peakEquity
+			if dd > maxDD {
+				maxDD = dd
+			}
 		}
 	}
 
 	return maxDD
+}
+
+// computeSharpe calculates an annualized Sharpe ratio from per-trade returns.
+// Uses 525600 minutes/year as the annualization factor (for 1m bars).
+func (e *Engine) computeSharpe() float64 {
+	if len(e.trades) < 2 {
+		return 0
+	}
+
+	returns := make([]float64, len(e.trades))
+	for i, t := range e.trades {
+		if e.stats.InitialEquity > 0 {
+			returns[i] = t.NetPnL / e.stats.InitialEquity
+		}
+	}
+
+	// Mean return per trade
+	sum := 0.0
+	for _, r := range returns {
+		sum += r
+	}
+	mean := sum / float64(len(returns))
+
+	// Stdev of returns
+	sqSum := 0.0
+	for _, r := range returns {
+		d := r - mean
+		sqSum += d * d
+	}
+	stddev := math.Sqrt(sqSum / float64(len(returns)))
+
+	if stddev == 0 {
+		return 0
+	}
+
+	// Approximate trades per year.  If we have TotalDaysTraded we can
+	// derive a more accurate factor; otherwise assume an average hold of
+	// ~60 minutes (60 bars).
+	tradesPerYear := 0.0
+	if e.stats.TotalDaysTraded > 0 {
+		tradesPerDay := float64(len(e.trades)) / float64(e.stats.TotalDaysTraded)
+		tradesPerYear = tradesPerDay * 365.0
+	} else {
+		tradesPerYear = 365.0 * 24.0 // rough fallback
+	}
+
+	return (mean / stddev) * math.Sqrt(tradesPerYear)
 }
 
 // GetTrades returns all closed trades

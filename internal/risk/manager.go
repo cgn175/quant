@@ -2,6 +2,7 @@ package risk
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 )
@@ -26,17 +27,25 @@ func (p *Position) UpdateUnrealizedPnL(currentPrice float64) {
 	}
 }
 
+// deepCopy returns a value copy of the Position so callers cannot mutate
+// internal state.
+func (p *Position) deepCopy() *Position {
+	cp := *p
+	return &cp
+}
+
 type Config struct {
 	InitialEquity      float64
 	MaxRiskPerTradePct float64
 	MaxDailyLossPct    float64
 	MaxOpenPositions   int
 	MaxLeverage        float64
+	FeePercent         float64 // e.g. 0.1 means 0.1% per side
 }
 
 type Manager struct {
 	config         Config
-	mu             sync.RWMutex
+	mu             sync.Mutex // single mutex — no RWMutex to avoid RLock/Lock upgrade gaps
 	positions      map[string]*Position
 	equity         float64
 	dailyPnL       float64
@@ -53,21 +62,25 @@ func NewManager(config Config) *Manager {
 	}
 }
 
+// GetConfig returns a copy of the manager's config.
+func (m *Manager) GetConfig() Config {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.config
+}
+
 func (m *Manager) CalculatePositionSize(symbol string, entryPrice, stopLoss float64, sizeMultiplier float64) (float64, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if entryPrice <= 0 || stopLoss <= 0 {
 		return 0, fmt.Errorf("invalid prices: entry=%f, stopLoss=%f", entryPrice, stopLoss)
 	}
 
-	// Calculate risk distance
-	stopDistancePct := (entryPrice - stopLoss) / entryPrice
-	if stopDistancePct <= 0 {
-		stopDistancePct = -stopDistancePct
-	}
-	if stopDistancePct == 0 {
-		return 0, fmt.Errorf("stop loss equals entry price")
+	// Calculate risk distance using absolute value to handle both long & short
+	stopDistancePct := math.Abs((entryPrice - stopLoss) / entryPrice)
+	if stopDistancePct < 0.0001 {
+		return 0, fmt.Errorf("stop loss too close to entry price (distance=%.6f%%)", stopDistancePct*100)
 	}
 
 	// Risk amount per trade
@@ -80,66 +93,88 @@ func (m *Manager) CalculatePositionSize(symbol string, entryPrice, stopLoss floa
 	size := riskAmount / (entryPrice * stopDistancePct)
 
 	// Apply leverage constraint
-	maxSizeByLeverage := (m.equity * m.config.MaxLeverage) / entryPrice
-	if size > maxSizeByLeverage {
-		size = maxSizeByLeverage
+	if m.config.MaxLeverage > 0 {
+		maxSizeByLeverage := (m.equity * m.config.MaxLeverage) / entryPrice
+		if size > maxSizeByLeverage {
+			size = maxSizeByLeverage
+		}
 	}
 
 	return size, nil
 }
 
+// CanOpenPosition checks whether a new position can be opened for the given
+// symbol.  All checks are performed under a single exclusive lock so there is
+// no TOCTOU gap between the position-count check and the daily-reset / leverage
+// check.
 func (m *Manager) CanOpenPosition(symbol string) error {
-	m.mu.RLock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// Check if already have position in this symbol
 	if _, exists := m.positions[symbol]; exists {
-		m.mu.RUnlock()
 		return fmt.Errorf("position already exists for %s", symbol)
 	}
 
 	// Check max open positions
 	if len(m.positions) >= m.config.MaxOpenPositions {
-		m.mu.RUnlock()
 		return fmt.Errorf("max open positions (%d) reached", m.config.MaxOpenPositions)
 	}
 
-	m.mu.RUnlock()
-
-	// Check daily loss limit (requires lock upgrade, done separately)
-	m.mu.Lock()
+	// Reset daily PnL if a new day started (safe — we hold Lock)
 	m.checkDailyResetLocked()
+
+	// Check daily loss limit
 	maxDailyLoss := m.equity * (m.config.MaxDailyLossPct / 100.0)
 	if m.dailyPnL < -maxDailyLoss {
-		m.mu.Unlock()
 		return fmt.Errorf("daily loss limit exceeded: %.2f (limit: %.2f)", m.dailyPnL, maxDailyLoss)
 	}
 
 	// Check total account leverage
-	totalNotional := m.getTotalNotionalLocked()
-	currentLeverage := totalNotional / m.equity
-	if currentLeverage > m.config.MaxLeverage {
-		m.mu.Unlock()
-		return fmt.Errorf("total account leverage %.2fx exceeds max %.2fx", currentLeverage, m.config.MaxLeverage)
+	if m.config.MaxLeverage > 0 {
+		totalNotional := m.getTotalNotionalLocked()
+		if m.equity > 0 {
+			currentLeverage := totalNotional / m.equity
+			if currentLeverage > m.config.MaxLeverage {
+				return fmt.Errorf("total account leverage %.2fx exceeds max %.2fx", currentLeverage, m.config.MaxLeverage)
+			}
+		}
 	}
-	m.mu.Unlock()
 
 	return nil
 }
 
+// CanOpenPositionWithSize runs the same checks as CanOpenPosition and
+// additionally verifies that the proposed position would not exceed the
+// leverage limit.
 func (m *Manager) CanOpenPositionWithSize(symbol string, proposedEntryPrice, proposedSize float64) error {
-	if err := m.CanOpenPosition(symbol); err != nil {
-		return err
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// --- inline the CanOpenPosition checks so we stay under the same lock ---
+
+	if _, exists := m.positions[symbol]; exists {
+		return fmt.Errorf("position already exists for %s", symbol)
 	}
 
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	if len(m.positions) >= m.config.MaxOpenPositions {
+		return fmt.Errorf("max open positions (%d) reached", m.config.MaxOpenPositions)
+	}
 
-	proposedNotional := proposedEntryPrice * proposedSize
-	currentNotional := m.getTotalNotionalLocked()
-	newLeverage := (currentNotional + proposedNotional) / m.equity
+	m.checkDailyResetLocked()
 
-	if newLeverage > m.config.MaxLeverage {
-		return fmt.Errorf("proposed position would result in %.2fx leverage, exceeds max %.2fx", newLeverage, m.config.MaxLeverage)
+	maxDailyLoss := m.equity * (m.config.MaxDailyLossPct / 100.0)
+	if m.dailyPnL < -maxDailyLoss {
+		return fmt.Errorf("daily loss limit exceeded: %.2f (limit: %.2f)", m.dailyPnL, maxDailyLoss)
+	}
+
+	if m.config.MaxLeverage > 0 && m.equity > 0 {
+		proposedNotional := proposedEntryPrice * proposedSize
+		currentNotional := m.getTotalNotionalLocked()
+		newLeverage := (currentNotional + proposedNotional) / m.equity
+		if newLeverage > m.config.MaxLeverage {
+			return fmt.Errorf("proposed position would result in %.2fx leverage, exceeds max %.2fx", newLeverage, m.config.MaxLeverage)
+		}
 	}
 
 	return nil
@@ -167,6 +202,9 @@ func (m *Manager) OpenPosition(symbol, side string, entryPrice, size, stopLoss, 
 	return nil
 }
 
+// ClosePosition closes an existing position at exitPrice, deducts trading
+// fees from both entry and exit sides, updates equity / daily PnL, and
+// removes the position.  Returns the net PnL (after fees).
 func (m *Manager) ClosePosition(symbol string, exitPrice float64) (float64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -176,42 +214,52 @@ func (m *Manager) ClosePosition(symbol string, exitPrice float64) (float64, erro
 		return 0, fmt.Errorf("no position found for %s", symbol)
 	}
 
-	// Calculate realized PnL
-	var pnl float64
+	// Gross PnL
+	var grossPnL float64
 	if pos.Side == "LONG" {
-		pnl = (exitPrice - pos.EntryPrice) * pos.Size
+		grossPnL = (exitPrice - pos.EntryPrice) * pos.Size
 	} else {
-		pnl = (pos.EntryPrice - exitPrice) * pos.Size
+		grossPnL = (pos.EntryPrice - exitPrice) * pos.Size
 	}
 
+	// Deduct fees on both legs so equity/dailyPnL stay accurate.
+	feePct := m.config.FeePercent / 100.0
+	entryFees := pos.EntryPrice * pos.Size * feePct
+	exitFees := exitPrice * pos.Size * feePct
+	netPnL := grossPnL - entryFees - exitFees
+
 	// Update equity and daily PnL
-	m.equity += pnl
-	m.dailyPnL += pnl
-	m.realizedPnL += pnl
+	m.equity += netPnL
+	m.dailyPnL += netPnL
+	m.realizedPnL += netPnL
 
 	// Remove position
 	delete(m.positions, symbol)
 
-	return pnl, nil
+	return netPnL, nil
 }
 
+// GetPosition returns a deep copy of the position for the given symbol.
+// Callers cannot mutate internal state through the returned pointer.
 func (m *Manager) GetPosition(symbol string) (*Position, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	pos, exists := m.positions[symbol]
-	return pos, exists
+	if !exists {
+		return nil, false
+	}
+	return pos.deepCopy(), true
 }
 
+// GetAllPositions returns a map of deep-copied positions.
 func (m *Manager) GetAllPositions() map[string]*Position {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	result := make(map[string]*Position)
+	result := make(map[string]*Position, len(m.positions))
 	for k, v := range m.positions {
-		// Deep copy position to prevent external modification
-		pos := *v
-		result[k] = &pos
+		result[k] = v.deepCopy()
 	}
 	return result
 }
@@ -230,8 +278,8 @@ func (m *Manager) UpdatePositionPnL(symbol string, currentPrice float64) error {
 }
 
 func (m *Manager) ShouldClosePosition(symbol string, currentPrice float64) (bool, string) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	pos, exists := m.positions[symbol]
 	if !exists {
@@ -258,8 +306,8 @@ func (m *Manager) ShouldClosePosition(symbol string, currentPrice float64) (bool
 }
 
 func (m *Manager) GetEquity() float64 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.equity
 }
 
@@ -271,14 +319,14 @@ func (m *Manager) GetDailyPnL() float64 {
 }
 
 func (m *Manager) GetRealizedPnL() float64 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.realizedPnL
 }
 
 func (m *Manager) GetTotalUnrealizedPnL() float64 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	total := 0.0
 	for _, pos := range m.positions {
@@ -287,16 +335,8 @@ func (m *Manager) GetTotalUnrealizedPnL() float64 {
 	return total
 }
 
-// checkDailyReset is NOT thread-safe; must be called with lock held
-func (m *Manager) checkDailyReset() {
-	now := time.Now().Truncate(24 * time.Hour)
-	if now.After(m.dailyResetTime) {
-		m.dailyPnL = 0
-		m.dailyResetTime = now
-	}
-}
-
-// checkDailyResetLocked is thread-safe (assumes lock held by caller)
+// checkDailyResetLocked resets dailyPnL at the start of each UTC day.
+// MUST be called with m.mu held.
 func (m *Manager) checkDailyResetLocked() {
 	now := time.Now().Truncate(24 * time.Hour)
 	if now.After(m.dailyResetTime) {

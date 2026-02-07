@@ -2,6 +2,7 @@ package execution
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -62,8 +63,8 @@ type Trade struct {
 type Executor interface {
 	ExecuteMarketOrder(symbol string, side OrderSide, size float64) (*Order, error)
 	ExecuteLimitOrder(symbol string, side OrderSide, price, size float64) (*Order, error)
-	CancelOrder(orderID string) error
-	GetOrder(orderID string) (*Order, error)
+	CancelOrder(symbol string, orderID string) error
+	GetOrder(symbol string, orderID string) (*Order, error)
 	Close() error
 }
 
@@ -243,8 +244,10 @@ func (e *Engine) GetTradeStats() TradeStats {
 		stats.WinRate = float64(winCount) / float64(stats.TotalTrades)
 	}
 
-	if lossCount > 0 && totalLosses != 0 {
+	if lossCount > 0 && totalLosses < 0 {
 		stats.ProfitFactor = totalWins / (-totalLosses)
+	} else if winCount > 0 && lossCount == 0 {
+		stats.ProfitFactor = math.Inf(1) // perfect win rate
 	}
 
 	if stats.TotalTrades > 0 {

@@ -152,17 +152,6 @@ func (s *Strategy) shouldGoShort(fv *features.FeatureVector, pred *model.Predict
 	return true
 }
 
-func (s *Strategy) isExtremeSentiment(fv *features.FeatureVector) bool {
-	// Check if 24h sentiment is extreme (indicating high volatility)
-	if fv.SentimentScore24h > s.config.SentimentExtremeLimit {
-		return true
-	}
-	if fv.SentimentScore24h < -s.config.SentimentExtremeLimit {
-		return true
-	}
-	return false
-}
-
 func (s *Strategy) ShouldReduceSize(fv *features.FeatureVector) float64 {
 	// Return a multiplier for position size (0.5 = reduce by 50%, 1.0 = no reduction)
 	if fv == nil {

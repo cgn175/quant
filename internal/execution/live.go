@@ -185,8 +185,9 @@ func (l *LiveExecutor) ExecuteLimitOrder(symbol string, side OrderSide, price, s
 	return l.parseOrderResponse(body)
 }
 
-func (l *LiveExecutor) CancelOrder(orderID string) error {
+func (l *LiveExecutor) CancelOrder(symbol string, orderID string) error {
 	params := url.Values{}
+	params.Set("symbol", symbol)
 	params.Set("orderId", orderID)
 
 	_, err := l.doSignedRequest(http.MethodDelete, "/api/v3/order", params)
@@ -197,8 +198,9 @@ func (l *LiveExecutor) CancelOrder(orderID string) error {
 	return nil
 }
 
-func (l *LiveExecutor) GetOrder(orderID string) (*Order, error) {
+func (l *LiveExecutor) GetOrder(symbol string, orderID string) (*Order, error) {
 	params := url.Values{}
+	params.Set("symbol", symbol)
 	params.Set("orderId", orderID)
 
 	body, err := l.doSignedRequest(http.MethodGet, "/api/v3/order", params)

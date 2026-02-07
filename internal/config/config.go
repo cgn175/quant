@@ -28,9 +28,9 @@ type ExchangeConfig struct {
 }
 
 type SentimentConfig struct {
-	URL                    string  `mapstructure:"url"`
-	PollIntervalSeconds    int     `mapstructure:"poll_interval_seconds"`
-	SentimentThresholdLong float64 `mapstructure:"sentiment_threshold_long"`
+	URL                     string  `mapstructure:"url"`
+	PollIntervalSeconds     int     `mapstructure:"poll_interval_seconds"`
+	SentimentThresholdLong  float64 `mapstructure:"sentiment_threshold_long"`
 	SentimentThresholdShort float64 `mapstructure:"sentiment_threshold_short"`
 }
 
@@ -39,18 +39,38 @@ type RiskConfig struct {
 	MaxDailyLossPct    float64 `mapstructure:"max_daily_loss_pct"`
 	MaxOpenPositions   int     `mapstructure:"max_open_positions"`
 	MaxLeverage        float64 `mapstructure:"max_leverage"`
+	InitialEquityVal   float64 `mapstructure:"initial_equity"`
+}
+
+// InitialEquity returns the configured initial equity, defaulting to 10000
+// if not set or zero.
+func (r RiskConfig) InitialEquity() float64 {
+	if r.InitialEquityVal > 0 {
+		return r.InitialEquityVal
+	}
+	return 10000.0
 }
 
 type ModelConfig struct {
-	Path             string  `mapstructure:"path"`
-	RuntimeLibPath   string  `mapstructure:"runtime_lib_path"`
-	ThresholdUp      float64 `mapstructure:"threshold_up"`
-	ThresholdDown    float64 `mapstructure:"threshold_down"`
+	Path           string  `mapstructure:"path"`
+	RuntimeLibPath string  `mapstructure:"runtime_lib_path"`
+	ThresholdUp    float64 `mapstructure:"threshold_up"`
+	ThresholdDown  float64 `mapstructure:"threshold_down"`
 }
 
 type ExecutionConfig struct {
 	UseLimitOrders bool    `mapstructure:"use_limit_orders"`
 	SlippageBP     float64 `mapstructure:"slippage_bp"`
+	FeePercentVal  float64 `mapstructure:"fee_percent"`
+}
+
+// FeePercent returns the configured fee percentage (e.g. 0.1 means 0.1%).
+// Defaults to 0.1 if not set or zero.
+func (e ExecutionConfig) FeePercent() float64 {
+	if e.FeePercentVal > 0 {
+		return e.FeePercentVal
+	}
+	return 0.1
 }
 
 type MonitoringConfig struct {
@@ -103,12 +123,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("risk.max_daily_loss_pct", 3.0)
 	v.SetDefault("risk.max_open_positions", 3)
 	v.SetDefault("risk.max_leverage", 2.0)
+	v.SetDefault("risk.initial_equity", 10000.0)
 
 	v.SetDefault("model.threshold_up", 0.6)
 	v.SetDefault("model.threshold_down", 0.6)
 
 	v.SetDefault("execution.use_limit_orders", false)
 	v.SetDefault("execution.slippage_bp", 5.0)
+	v.SetDefault("execution.fee_percent", 0.1)
 
 	v.SetDefault("monitoring.prometheus_port", 9090)
 }

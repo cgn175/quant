@@ -3,42 +3,71 @@ package features
 import (
 	"math"
 	"time"
+
+	"github.com/cgn175/quant-bot/internal/exchange"
+	"github.com/cgn175/quant-bot/internal/sentiment"
 )
 
-// FeatureVector represents all features for a single bar
+// FeatureVector represents all features for a single bar.
+// The field order and ToArray() output MUST match FEATURE_COLUMNS in
+// scripts/build_features.py so that the ONNX model receives features in
+// the same order it was trained on.
 type FeatureVector struct {
-	Symbol           string
-	Timestamp        time.Time
-	Open             float64
-	High             float64
-	Low              float64
-	Close            float64
-	Volume           float64
-	VolumeRatio      float64 // Current volume / rolling average volume
-	LogReturn1m      float64
-	LogReturn5m      float64
-	EMA5             float64
-	EMA9             float64
-	EMA21            float64
-	EMA50            float64
-	RSI7             float64
-	RSI14            float64
-	BBandUpper       float64 // Bollinger Band upper
-	BBandLower       float64 // Bollinger Band lower
-	BBandMiddle      float64
-	BBWidth          float64 // Bollinger Band width (upper - lower)
-	MACD             float64
-	MACDSignal       float64
-	MACDHist         float64
+	Symbol    string
+	Timestamp time.Time
+
+	// Raw OHLCV
+	Open   float64
+	High   float64
+	Low    float64
+	Close  float64
+	Volume float64
+
+	// --- Model features (23 total, order matters) ---
+	// 1. close (raw)
+	// 2-3. log returns
+	LogReturn1m float64
+	LogReturn5m float64
+	// 4-7. EMAs
+	EMA5  float64
+	EMA9  float64
+	EMA21 float64
+	EMA50 float64
+	// 8-9. RSI
+	RSI7  float64
+	RSI14 float64
+	// 10-13. Bollinger bands
+	BBandUpper  float64
+	BBandMiddle float64
+	BBandLower  float64
+	BBWidth     float64
+	// 14-16. MACD
+	MACD       float64
+	MACDSignal float64
+	MACDHist   float64
+	// 17. Volume ratio
+	VolumeRatio float64
+	// 18-21. Sentiment
 	SentimentScore1h  float64
 	SentimentScore24h float64
 	MentionsZScore    float64
 	SentimentVelocity float64
+	// 22-23. Time-of-day encoding
+	HourSin float64
+	HourCos float64
 }
 
-// ToArray converts the feature vector to a float64 array for model input
+// ToArray converts the feature vector to a float64 slice for model input.
+// The order MUST match scripts/build_features.py FEATURE_COLUMNS exactly:
+//
+//	close, log_ret_1m, log_ret_5m, ema_5, ema_9, ema_21, ema_50,
+//	rsi_7, rsi_14, bb_upper, bb_middle, bb_lower, bb_width,
+//	macd, macd_signal, macd_histogram, volume_ratio,
+//	sentiment_1h, sentiment_24h, mentions_zscore, sentiment_velocity,
+//	hour_sin, hour_cos
 func (fv *FeatureVector) ToArray() []float64 {
 	return []float64{
+		fv.Close,
 		fv.LogReturn1m,
 		fv.LogReturn5m,
 		fv.EMA5,
@@ -48,8 +77,9 @@ func (fv *FeatureVector) ToArray() []float64 {
 		fv.RSI7,
 		fv.RSI14,
 		fv.BBandUpper,
-		fv.BBandLower,
 		fv.BBandMiddle,
+		fv.BBandLower,
+		fv.BBWidth,
 		fv.MACD,
 		fv.MACDSignal,
 		fv.MACDHist,
@@ -58,278 +88,159 @@ func (fv *FeatureVector) ToArray() []float64 {
 		fv.SentimentScore24h,
 		fv.MentionsZScore,
 		fv.SentimentVelocity,
+		fv.HourSin,
+		fv.HourCos,
 	}
 }
 
-// ToSlice is an alias for ToArray for compatibility
+// ToSlice is an alias for ToArray for compatibility.
 func (fv *FeatureVector) ToSlice() []float64 {
 	return fv.ToArray()
 }
 
-// Builder computes features for a bar
-type Builder struct {
-	// Buffers for rolling indicators
-	closes      map[string][]float64 // Rolling price history
-	volumes     map[string][]float64 // Rolling volume history
-	maxBufferLen int
-}
-
-// NewBuilder creates a new feature builder
-func NewBuilder(bufferLen int) *Builder {
-	if bufferLen < 100 {
-		bufferLen = 100 // Minimum to compute indicators
-	}
-	return &Builder{
-		closes:       make(map[string][]float64),
-		volumes:      make(map[string][]float64),
-		maxBufferLen: bufferLen,
-	}
-}
-
-// NewFeatureBuilder creates a new feature builder with default buffer size
-func NewFeatureBuilder() *Builder {
-	return NewBuilder(200)
-}
-
-// FeatureNames returns the names of all features in order
+// FeatureNames returns the ordered list of feature names matching the
+// Python training script's FEATURE_COLUMNS.  The Go predictor uses
+// len(FeatureNames()) to size the ONNX input tensor.
 func FeatureNames() []string {
 	return []string{
-		"log_return_1m",
-		"log_return_5m",
+		"close",
+		"log_ret_1m",
+		"log_ret_5m",
 		"ema_5",
 		"ema_9",
 		"ema_21",
 		"ema_50",
 		"rsi_7",
 		"rsi_14",
-		"bband_upper",
-		"bband_lower",
-		"bband_middle",
+		"bb_upper",
+		"bb_middle",
+		"bb_lower",
+		"bb_width",
 		"macd",
 		"macd_signal",
-		"macd_hist",
+		"macd_histogram",
 		"volume_ratio",
-		"sentiment_score_1h",
-		"sentiment_score_24h",
+		"sentiment_1h",
+		"sentiment_24h",
 		"mentions_zscore",
 		"sentiment_velocity",
+		"hour_sin",
+		"hour_cos",
 	}
 }
 
-// MinCandles returns minimum number of candles needed before building features
+// Builder computes a FeatureVector from raw candles + sentiment data.
+// It delegates to the indicator functions in indicators.go (EMA, RSI,
+// Bollinger, CalcMACD, LogReturn, VolumeRatio) which are correct
+// implementations that operate on []exchange.Candle.
+type Builder struct {
+	minCandles int
+}
+
+// NewFeatureBuilder creates a new feature builder.
+func NewFeatureBuilder() *Builder {
+	// We need at least 50 candles to compute the slowest indicator
+	// (EMA-50) plus a small warm-up margin.
+	return &Builder{minCandles: 55}
+}
+
+// MinCandles returns the minimum number of candles required before
+// features can be computed.
 func (b *Builder) MinCandles() int {
-	return 50 // Minimum for 50-period indicators
+	return b.minCandles
 }
 
-// Build computes a feature vector from candles and sentiment data
-// Returns nil if there aren't enough candles yet
-func (b *Builder) Build(candles interface{}, sentimentData interface{}) *FeatureVector {
-	// Handle different input types - expect []Candle from exchange package
-	candleList, ok := candles.([]interface{})
-	if !ok {
+// Build computes a FeatureVector from the latest candle in the slice.
+// Returns nil when there are not enough candles for indicator warm-up.
+//
+// Parameters:
+//   - candles: time-sorted []exchange.Candle (oldest first).
+//   - sent:    latest sentiment data for the symbol (may be nil).
+func (b *Builder) Build(candles []exchange.Candle, sent *sentiment.SentimentData) *FeatureVector {
+	if len(candles) < b.minCandles {
 		return nil
 	}
-	
-	if len(candleList) < b.MinCandles() {
-		return nil
-	}
-	
-	// Build feature vector from latest candle
-	// This would be filled in with actual implementation using exchange.Candle type
-	// For now, return a placeholder
-	return &FeatureVector{
-		Timestamp: time.Now(),
-		Close: 0,
-		EMA21: 0,
-		EMA50: 0,
-		RSI14: 0,
-		BBandUpper: 0,
-		BBandLower: 0,
-		BBandMiddle: 0,
-		BBWidth: 0,
-		SentimentScore1h: 0,
-		SentimentScore24h: 0,
-	}
-}
 
-// BuildFromRaw computes a feature vector for the current bar (internal use)
-func (b *Builder) BuildFromRaw(symbol string, close, high, low, open, volume float64, 
-	sentiment1h, sentiment24h float64) *FeatureVector {
-	
-	// Add to rolling buffers
-	if b.closes[symbol] == nil {
-		b.closes[symbol] = make([]float64, 0, b.maxBufferLen)
-		b.volumes[symbol] = make([]float64, 0, b.maxBufferLen)
-	}
-
-	b.closes[symbol] = append(b.closes[symbol], close)
-	b.volumes[symbol] = append(b.volumes[symbol], volume)
-
-	// Trim buffers if too long
-	if len(b.closes[symbol]) > b.maxBufferLen {
-		b.closes[symbol] = b.closes[symbol][1:]
-		b.volumes[symbol] = b.volumes[symbol][1:]
-	}
-
-	closes := b.closes[symbol]
-	volumes := b.volumes[symbol]
+	last := candles[len(candles)-1]
 
 	fv := &FeatureVector{
-		Symbol:            symbol,
-		Timestamp:         time.Now(),
-		Open:              open,
-		High:              high,
-		Low:               low,
-		Close:             close,
-		Volume:            volume,
-		SentimentScore1h:  sentiment1h,
-		SentimentScore24h: sentiment24h,
+		Symbol:    last.Symbol,
+		Timestamp: last.CloseTime,
+		Open:      last.Open,
+		High:      last.High,
+		Low:       last.Low,
+		Close:     last.Close,
+		Volume:    last.Volume,
 	}
 
-	// Compute log returns
-	if len(closes) >= 2 {
-		fv.LogReturn1m = logReturn(closes[len(closes)-2], close)
+	// ---- Log returns (actual log, matching Python np.log(c/c.shift)) ----
+	logRet1 := LogReturn(candles, 1)
+	if logRet1 != nil {
+		fv.LogReturn1m = logRet1[len(logRet1)-1]
 	}
-	if len(closes) >= 6 {
-		fv.LogReturn5m = logReturn(closes[len(closes)-6], close)
-	}
-
-	// Compute EMAs
-	if len(closes) >= 5 {
-		fv.EMA5 = ema(closes, 5)
-	}
-	if len(closes) >= 9 {
-		fv.EMA9 = ema(closes, 9)
-	}
-	if len(closes) >= 21 {
-		fv.EMA21 = ema(closes, 21)
-	}
-	if len(closes) >= 50 {
-		fv.EMA50 = ema(closes, 50)
+	logRet5 := LogReturn(candles, 5)
+	if logRet5 != nil {
+		fv.LogReturn5m = logRet5[len(logRet5)-1]
 	}
 
-	// Compute RSI
-	if len(closes) >= 7 {
-		fv.RSI7 = rsi(closes, 7)
+	// ---- EMAs ----
+	if ema5 := EMA(candles, 5); ema5 != nil {
+		fv.EMA5 = ema5[len(ema5)-1]
 	}
-	if len(closes) >= 14 {
-		fv.RSI14 = rsi(closes, 14)
+	if ema9 := EMA(candles, 9); ema9 != nil {
+		fv.EMA9 = ema9[len(ema9)-1]
+	}
+	if ema21 := EMA(candles, 21); ema21 != nil {
+		fv.EMA21 = ema21[len(ema21)-1]
+	}
+	if ema50 := EMA(candles, 50); ema50 != nil {
+		fv.EMA50 = ema50[len(ema50)-1]
 	}
 
-	// Compute volume ratio
-	if len(volumes) >= 20 {
-		avgVol := average(volumes[len(volumes)-20:])
-		if avgVol > 0 {
-			fv.VolumeRatio = volume / avgVol
+	// ---- RSI ----
+	if rsi7 := RSI(candles, 7); rsi7 != nil {
+		fv.RSI7 = rsi7[len(rsi7)-1]
+	}
+	if rsi14 := RSI(candles, 14); rsi14 != nil {
+		fv.RSI14 = rsi14[len(rsi14)-1]
+	}
+
+	// ---- Bollinger Bands (20, 2) ----
+	if bb := Bollinger(candles, 20, 2.0); bb != nil {
+		idx := len(bb.Upper) - 1
+		fv.BBandUpper = bb.Upper[idx]
+		fv.BBandMiddle = bb.Middle[idx]
+		fv.BBandLower = bb.Lower[idx]
+		if fv.BBandMiddle > 0 {
+			fv.BBWidth = (fv.BBandUpper - fv.BBandLower) / fv.BBandMiddle
 		}
 	}
 
-	// Compute Bollinger Bands
-	if len(closes) >= 20 {
-		fv.BBandMiddle = sma(closes[len(closes)-20:], 20)
-		stddev := std(closes[len(closes)-20:])
-		fv.BBandUpper = fv.BBandMiddle + 2*stddev
-		fv.BBandLower = fv.BBandMiddle - 2*stddev
-		fv.BBWidth = fv.BBandUpper - fv.BBandLower
+	// ---- MACD (12, 26, 9) ----
+	if macd := CalcMACD(candles, 12, 26, 9); macd != nil {
+		idx := len(macd.MACD) - 1
+		fv.MACD = macd.MACD[idx]
+		fv.MACDSignal = macd.Signal[idx]
+		fv.MACDHist = macd.Histogram[idx]
 	}
 
-	// Compute MACD
-	if len(closes) >= 26 {
-		ema12 := ema(closes, 12)
-		ema26 := ema(closes, 26)
-		fv.MACD = ema12 - ema26
-		// Signal is 9-period EMA of MACD (simplified)
-		fv.MACDSignal = fv.MACD * 0.65 // approximation
-		fv.MACDHist = fv.MACD - fv.MACDSignal
+	// ---- Volume ratio ----
+	if vr := VolumeRatio(candles, 20); vr != nil {
+		fv.VolumeRatio = vr[len(vr)-1]
 	}
+
+	// ---- Sentiment ----
+	if sent != nil {
+		fv.SentimentScore1h = sent.Score1h
+		fv.SentimentScore24h = sent.Score24h
+		fv.MentionsZScore = sent.MentionsZScore
+		fv.SentimentVelocity = sent.Velocity
+	}
+
+	// ---- Time-of-day encoding ----
+	hour := float64(last.CloseTime.Hour()) + float64(last.CloseTime.Minute())/60.0
+	fv.HourSin = math.Sin(2 * math.Pi * hour / 24.0)
+	fv.HourCos = math.Cos(2 * math.Pi * hour / 24.0)
 
 	return fv
-}
-
-// Helper functions for indicator computation
-
-func logReturn(prev, curr float64) float64 {
-	if prev <= 0 {
-		return 0
-	}
-	return (curr - prev) / prev
-}
-
-func sma(values []float64, period int) float64 {
-	if len(values) < period {
-		return 0
-	}
-	sum := 0.0
-	for i := len(values) - period; i < len(values); i++ {
-		sum += values[i]
-	}
-	return sum / float64(period)
-}
-
-func ema(values []float64, period int) float64 {
-	if len(values) < period {
-		return 0
-	}
-
-	multiplier := 2.0 / float64(period+1)
-	sma := sma(values[:period], period)
-	ema := sma
-
-	for i := period; i < len(values); i++ {
-		ema = values[i]*multiplier + ema*(1-multiplier)
-	}
-	return ema
-}
-
-func rsi(values []float64, period int) float64 {
-	if len(values) < period+1 {
-		return 50
-	}
-
-	gains := 0.0
-	losses := 0.0
-
-	for i := len(values) - period; i < len(values); i++ {
-		change := values[i] - values[i-1]
-		if change > 0 {
-			gains += change
-		} else {
-			losses -= change
-		}
-	}
-
-	avgGain := gains / float64(period)
-	avgLoss := losses / float64(period)
-
-	if avgLoss == 0 {
-		return 100
-	}
-
-	rs := avgGain / avgLoss
-	return 100 - (100 / (1 + rs))
-}
-
-func average(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-	sum := 0.0
-	for _, v := range values {
-		sum += v
-	}
-	return sum / float64(len(values))
-}
-
-func std(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-	avg := average(values)
-	sumSquares := 0.0
-	for _, v := range values {
-		diff := v - avg
-		sumSquares += diff * diff
-	}
-	variance := sumSquares / float64(len(values))
-	return math.Sqrt(variance)
 }

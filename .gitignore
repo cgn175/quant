@@ -1,0 +1,76 @@
+# Binaries
+bin/
+bot
+*.exe
+
+# Go build cache
+*.test
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — NEVER commit API keys
+.env
+.env.*
+!.env.example
+
+# Config with real credentials
+# (keep config.yaml as a template with empty values)
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Model artifacts (large binary files)
+models/*.onnx
+models/*.json
+models/*.joblib
+models/*.ubj
+models/metrics.json
+models/features.json
+
+# Training data
+data/
+*.parquet
+*.csv
+*.h5
+
+# Backtest output
+models/backtest.png
+backtest_results/
+
+# Sentiment model cache (downloaded by transformers)
+sentiment/models/finbert-cache/
+
+# Docker
+docker-compose.override.yaml
+
+# Redis data
+dump.rdb
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/

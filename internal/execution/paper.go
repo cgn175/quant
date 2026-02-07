@@ -43,12 +43,11 @@ func (p *PaperExecutor) ExecuteMarketOrder(symbol string, side OrderSide, size f
 		ClientOrderID: fmt.Sprintf("paper_%s_%d", symbol, now.UnixNano()),
 	}
 
-	// Simulate immediate fill with slippage
-	// Note: In real implementation, this would get current market price
-	// For paper trading, we'll need to pass the current price or get it from market data
-	// For now, we'll mark it as filled and set price to 0 (will be updated externally)
-	order.Status = OrderStatusFilled
-	order.FilledSize = size
+	// Market orders are left in NEW status with FilledPrice = 0.
+	// The caller MUST call SimulateFill(order, marketPrice) to set the
+	// filled price with slippage applied and transition to FILLED.
+	// This prevents the old bug where FilledPrice stayed 0 because
+	// SimulateFill short-circuited on already-FILLED orders.
 
 	p.mu.Lock()
 	p.orders[orderID] = order
@@ -75,17 +74,13 @@ func (p *PaperExecutor) ExecuteLimitOrder(symbol string, side OrderSide, price, 
 		Side:          side,
 		Price:         price,
 		Size:          size,
-		Status:        OrderStatusNew,
+		Status:        OrderStatusFilled,
+		FilledPrice:   price,
+		FilledSize:    size,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		ClientOrderID: fmt.Sprintf("paper_%s_%d", symbol, now.UnixNano()),
 	}
-
-	// For paper trading, simulate immediate fill at limit price
-	order.Status = OrderStatusFilled
-	order.FilledPrice = price
-	order.FilledSize = size
-	order.UpdatedAt = now
 
 	p.mu.Lock()
 	p.orders[orderID] = order
@@ -94,15 +89,25 @@ func (p *PaperExecutor) ExecuteLimitOrder(symbol string, side OrderSide, price, 
 	return order, nil
 }
 
+// SimulateFill fills a market order at the given market price with slippage
+// applied. For BUY orders the fill price is nudged up; for SELL orders it is
+// nudged down, modelling realistic adverse slippage.
+//
+// It is safe to call on an order that is already filled (idempotent).
 func (p *PaperExecutor) SimulateFill(order *Order, marketPrice float64) {
-	if order == nil || order.Status == OrderStatusFilled {
+	if order == nil {
 		return
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Apply slippage
+	// Skip if the order already has a valid filled price (e.g. limit orders).
+	if order.Status == OrderStatusFilled && order.FilledPrice > 0 {
+		return
+	}
+
+	// Apply slippage: buys fill slightly above market, sells slightly below.
 	slippageMultiplier := 1.0 + (p.slippageBP / 10000.0)
 	if order.Side == OrderSideBuy {
 		order.FilledPrice = marketPrice * slippageMultiplier
@@ -115,7 +120,7 @@ func (p *PaperExecutor) SimulateFill(order *Order, marketPrice float64) {
 	order.UpdatedAt = time.Now()
 }
 
-func (p *PaperExecutor) CancelOrder(orderID string) error {
+func (p *PaperExecutor) CancelOrder(symbol string, orderID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -134,7 +139,7 @@ func (p *PaperExecutor) CancelOrder(orderID string) error {
 	return nil
 }
 
-func (p *PaperExecutor) GetOrder(orderID string) (*Order, error) {
+func (p *PaperExecutor) GetOrder(symbol string, orderID string) (*Order, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 

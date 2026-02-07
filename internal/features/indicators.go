@@ -165,6 +165,11 @@ func CalcMACD(candles []exchange.Candle, fastPeriod, slowPeriod, signalPeriod in
 	}
 }
 
+// LogReturn computes the natural log return over `period` bars:
+//
+//	log_ret[i] = ln(close[i] / close[i-period])
+//
+// This matches Python's  np.log(df["close"] / df["close"].shift(period)).
 func LogReturn(candles []exchange.Candle, period int) []float64 {
 	if len(candles) < period+1 {
 		return nil
@@ -172,8 +177,10 @@ func LogReturn(candles []exchange.Candle, period int) []float64 {
 
 	returns := make([]float64, len(candles))
 	for i := period; i < len(candles); i++ {
-		if candles[i-period].Close > 0 {
-			returns[i] = math.Log(candles[i].Close / candles[i-period].Close)
+		prev := candles[i-period].Close
+		curr := candles[i].Close
+		if prev > 0 && curr > 0 {
+			returns[i] = math.Log(curr / prev)
 		}
 	}
 
