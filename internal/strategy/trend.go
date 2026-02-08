@@ -910,10 +910,13 @@ func (ts *TrendStrategy) GetDailyPnL() float64 {
 
 // CalculatePositionSize computes the position size based on ATR risk.
 //
-//	size = (equity * riskPerTrade * sizeMultiplier) / (entryPrice * stopDistancePct)
+//	size = (equity * riskPerTrade * sizeMultiplier * marketVolScalar) / (entryPrice * stopDistancePct)
 //	capped by maxLeverage
+//
+// The marketVolScalar parameter (Patch 4: Volatility Scalar) adjusts size based on
+// overall market regime: 1.2x in quiet markets, 0.5x in violent markets, 1.0x otherwise.
 func (ts *TrendStrategy) CalculatePositionSize(
-	equity, entryPrice, stopLoss, sizeMultiplier float64,
+	equity, entryPrice, stopLoss, sizeMultiplier, marketVolScalar float64,
 ) float64 {
 	cfg := ts.config
 
@@ -922,7 +925,12 @@ func (ts *TrendStrategy) CalculatePositionSize(
 		return 0
 	}
 
-	riskAmount := equity * cfg.RiskPerTrade * sizeMultiplier
+	// Apply market volatility scalar (Patch 4)
+	if marketVolScalar <= 0 {
+		marketVolScalar = 1.0
+	}
+
+	riskAmount := equity * cfg.RiskPerTrade * sizeMultiplier * marketVolScalar
 	size := riskAmount / (entryPrice * stopDistancePct)
 
 	// Apply leverage constraint
@@ -934,6 +942,51 @@ func (ts *TrendStrategy) CalculatePositionSize(
 	}
 
 	return size
+}
+
+// ---------------------------------------------------------------------------
+// Market Volatility Scalar (Patch 4: Volatility Scalar)
+// ---------------------------------------------------------------------------
+
+// MarketVolatilityScalar calculates a position size scalar based on market regime.
+// Uses the average ATR% of BTC and ETH as a proxy for overall market volatility.
+//
+// Returns:
+//   - 1.2 if market is quiet (ATR% < 2%) — safe to take bigger positions
+//   - 0.5 if market is violent (ATR% > 5%) — preserve capital
+//   - 1.0 otherwise (normal market)
+func MarketVolatilityScalar(btcATRPct, ethATRPct float64) float64 {
+	marketVol := (btcATRPct + ethATRPct) / 2.0
+
+	switch {
+	case marketVol > 0.05: // High vol (5%+)
+		return 0.5
+	case marketVol < 0.02: // Low vol (<2%)
+		return 1.2
+	default:
+		return 1.0
+	}
+}
+
+// CalculateATRPercent calculates the ATR as a percentage of price.
+// Returns ATR[lastIndex] / Close[lastIndex].
+func CalculateATRPercent(candles []exchange.Candle, period int) float64 {
+	if len(candles) < period+1 {
+		return 0
+	}
+
+	atr := features.ATR(candles, period)
+	if atr == nil || len(atr) == 0 {
+		return 0
+	}
+
+	lastIdx := len(candles) - 1
+	lastClose := candles[lastIdx].Close
+	if lastClose <= 0 {
+		return 0
+	}
+
+	return atr[lastIdx] / lastClose
 }
 
 // ---------------------------------------------------------------------------

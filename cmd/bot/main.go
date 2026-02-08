@@ -394,6 +394,19 @@ func handleTrendTick(ctx context.Context, tick tickEvent, d trendDepsBundle) {
 	logTrendTick(sym, candles, d)
 }
 
+// calculateMarketVolScalar computes the market volatility scalar for position sizing.
+// Uses average ATR% of BTC and ETH as a proxy for overall market volatility.
+// (Patch 4: Volatility Scalar)
+func calculateMarketVolScalar(store *data.CandleStore) float64 {
+	btcCandles := store.GetAll("BTCUSDT")
+	ethCandles := store.GetAll("ETHUSDT")
+
+	btcATRPct := strategy.CalculateATRPercent(btcCandles, 14)
+	ethATRPct := strategy.CalculateATRPercent(ethCandles, 14)
+
+	return strategy.MarketVolatilityScalar(btcATRPct, ethATRPct)
+}
+
 // handleTrendEntry opens a new position from a trend signal.
 // Uses reservation pattern to prevent TOCTOU race between per-symbol goroutines.
 func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
@@ -425,11 +438,22 @@ func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 
 	// From here, we MUST either ConfirmReservation or CancelReservation
 	equity := d.riskMgr.GetEquity()
-	size := d.trendStrat.CalculatePositionSize(equity, sig.Price, sig.StopLoss, sizeMultiplier)
+
+	// Calculate market volatility scalar (Patch 4: Volatility Scalar)
+	marketVolScalar := calculateMarketVolScalar(d.store)
+
+	size := d.trendStrat.CalculatePositionSize(equity, sig.Price, sig.StopLoss, sizeMultiplier, marketVolScalar)
 	if size <= 0 {
 		d.trendStrat.CancelReservation(sym)
 		return
 	}
+
+	log.Debug().
+		Str("symbol", sym).
+		Float64("market_vol_scalar", marketVolScalar).
+		Float64("size_mult", sizeMultiplier).
+		Float64("size", size).
+		Msg("calculated position size with market vol scalar")
 
 	// Execute order
 	start := time.Now()
@@ -453,7 +477,7 @@ func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 		return
 	}
 
-	riskAmount := equity * (d.cfg.Risk.MaxRiskPerTradePct / 100.0) * sizeMultiplier
+	riskAmount := equity * (d.cfg.Risk.MaxRiskPerTradePct / 100.0) * sizeMultiplier * marketVolScalar
 
 	// Register in risk manager
 	if err := d.riskMgr.OpenPosition(sym, side, order.FilledPrice, size, sig.StopLoss, 0, riskAmount); err != nil {

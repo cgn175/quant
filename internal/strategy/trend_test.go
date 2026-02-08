@@ -237,12 +237,13 @@ func TestCalculatePositionSize_Normal(t *testing.T) {
 	entryPrice := 50000.0
 	stopLoss := 47000.0 // 6% distance
 	sizeMult := 1.0
+	marketVolScalar := 1.0
 
-	size := ts.CalculatePositionSize(equity, entryPrice, stopLoss, sizeMult)
+	size := ts.CalculatePositionSize(equity, entryPrice, stopLoss, sizeMult, marketVolScalar)
 
-	// Expected: (10000 * 0.01 * 1.0) / (50000 * 0.06) = 100 / 3000 = 0.03333
+	// Expected: (10000 * 0.01 * 1.0 * 1.0) / (50000 * 0.06) = 100 / 3000 = 0.03333
 	stopDistPct := math.Abs((entryPrice - stopLoss) / entryPrice)
-	expected := (equity * 0.01 * sizeMult) / (entryPrice * stopDistPct)
+	expected := (equity * 0.01 * sizeMult * marketVolScalar) / (entryPrice * stopDistPct)
 	if !almostEqual(size, expected) {
 		t.Errorf("size: got %.6f, want %.6f", size, expected)
 	}
@@ -257,8 +258,9 @@ func TestCalculatePositionSize_LeverageCap(t *testing.T) {
 	entryPrice := 100.0
 	stopLoss := 99.0 // very tight stop → large size
 	sizeMult := 1.0
+	marketVolScalar := 1.0
 
-	size := ts.CalculatePositionSize(equity, entryPrice, stopLoss, sizeMult)
+	size := ts.CalculatePositionSize(equity, entryPrice, stopLoss, sizeMult, marketVolScalar)
 
 	// Max size by leverage: (10000 * 2.0) / 100 = 200
 	maxSize := (equity * cfg.MaxLeverage) / entryPrice
@@ -270,7 +272,7 @@ func TestCalculatePositionSize_LeverageCap(t *testing.T) {
 func TestCalculatePositionSize_TightStop(t *testing.T) {
 	ts := NewTrendStrategy(DefaultTrendConfig())
 
-	size := ts.CalculatePositionSize(10000, 50000, 50000, 1.0) // zero distance
+	size := ts.CalculatePositionSize(10000, 50000, 50000, 1.0, 1.0) // zero distance
 	if size != 0 {
 		t.Errorf("expected 0 for zero stop distance, got %.6f", size)
 	}
@@ -279,11 +281,53 @@ func TestCalculatePositionSize_TightStop(t *testing.T) {
 func TestCalculatePositionSize_SizeMultiplier(t *testing.T) {
 	ts := NewTrendStrategy(DefaultTrendConfig())
 
-	sizeFull := ts.CalculatePositionSize(10000, 50000, 47000, 1.0)
-	sizeHalf := ts.CalculatePositionSize(10000, 50000, 47000, 0.5)
+	sizeFull := ts.CalculatePositionSize(10000, 50000, 47000, 1.0, 1.0)
+	sizeHalf := ts.CalculatePositionSize(10000, 50000, 47000, 0.5, 1.0)
 
 	if !almostEqual(sizeHalf, sizeFull*0.5) {
 		t.Errorf("half multiplier: got %.6f, want %.6f", sizeHalf, sizeFull*0.5)
+	}
+}
+
+func TestCalculatePositionSize_MarketVolScalar(t *testing.T) {
+	ts := NewTrendStrategy(DefaultTrendConfig())
+
+	sizeNormal := ts.CalculatePositionSize(10000, 50000, 47000, 1.0, 1.0)
+	sizeQuiet := ts.CalculatePositionSize(10000, 50000, 47000, 1.0, 1.2)
+	sizeViolent := ts.CalculatePositionSize(10000, 50000, 47000, 1.0, 0.5)
+
+	// Quiet market should allow larger positions
+	if !almostEqual(sizeQuiet, sizeNormal*1.2) {
+		t.Errorf("quiet market: got %.6f, want %.6f", sizeQuiet, sizeNormal*1.2)
+	}
+
+	// Violent market should reduce positions
+	if !almostEqual(sizeViolent, sizeNormal*0.5) {
+		t.Errorf("violent market: got %.6f, want %.6f", sizeViolent, sizeNormal*0.5)
+	}
+}
+
+func TestMarketVolatilityScalar(t *testing.T) {
+	tests := []struct {
+		btcATR  float64
+		ethATR  float64
+		want    float64
+		desc    string
+	}{
+		{0.01, 0.01, 1.2, "quiet market (1% avg ATR)"},
+		{0.015, 0.015, 1.2, "quiet market (1.5% avg ATR)"},
+		{0.03, 0.03, 1.0, "normal market (3% avg ATR)"},
+		{0.04, 0.04, 1.0, "normal market (4% avg ATR)"},
+		{0.06, 0.06, 0.5, "violent market (6% avg ATR)"},
+		{0.10, 0.10, 0.5, "violent market (10% avg ATR)"},
+		{0.01, 0.05, 1.0, "mixed (1% + 5% = 3% avg)"},
+	}
+
+	for _, tc := range tests {
+		got := MarketVolatilityScalar(tc.btcATR, tc.ethATR)
+		if got != tc.want {
+			t.Errorf("%s: got %.2f, want %.2f", tc.desc, got, tc.want)
+		}
 	}
 }
 
