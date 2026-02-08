@@ -126,6 +126,7 @@ type TrendPosition struct {
 	InitialRisk   float64   // entry - initial_stop (absolute value, per unit)
 	PartialStage  int       // 0=none, 1=first partial done, 2=second partial done
 	SizeMultiplier float64  // 1.0 or 0.5 (from funding filter)
+	Pending       bool      // true if this is a reservation (order not yet filled)
 }
 
 // CurrentR returns the current profit in R-multiples.
@@ -278,16 +279,24 @@ func (ts *TrendStrategy) checkDailyReset() {
 // CanEnter checks all TrendStrategy-level gating conditions under a single
 // lock to avoid TOCTOU races between per-symbol goroutines. Returns (true, "")
 // if entry is allowed, or (false, reason) if blocked.
+//
+// DEPRECATED: Use TryReserveEntry instead, which atomically checks and reserves.
 func (ts *TrendStrategy) CanEnter(symbol string, direction string) (bool, string) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
-	// Already have a position for this symbol?
+	return ts.canEnterLocked(symbol, direction)
+}
+
+// canEnterLocked is the internal implementation of CanEnter.
+// Caller must hold ts.mu.
+func (ts *TrendStrategy) canEnterLocked(symbol string, direction string) (bool, string) {
+	// Already have a position (or reservation) for this symbol?
 	if _, exists := ts.positions[symbol]; exists {
 		return false, "position_exists"
 	}
 
-	// Max positions reached?
+	// Max positions reached? (includes pending reservations)
 	if len(ts.positions) >= ts.config.MaxOpenPositions {
 		return false, "max_positions"
 	}
@@ -298,7 +307,7 @@ func (ts *TrendStrategy) CanEnter(symbol string, direction string) (bool, string
 		return false, "daily_halted"
 	}
 
-	// Correlation limit: max same-direction positions
+	// Correlation limit: max same-direction positions (includes pending)
 	sameCount := 0
 	for _, pos := range ts.positions {
 		if pos.Side == direction {
@@ -310,6 +319,76 @@ func (ts *TrendStrategy) CanEnter(symbol string, direction string) (bool, string
 	}
 
 	return true, ""
+}
+
+// TryReserveEntry atomically checks if entry is allowed and creates a pending
+// reservation. This prevents TOCTOU races between per-symbol goroutines.
+// Returns (true, "") if reservation succeeded, or (false, reason) if blocked.
+// On success, caller MUST call either ConfirmReservation (on order fill) or
+// CancelReservation (on order failure/timeout).
+func (ts *TrendStrategy) TryReserveEntry(symbol string, direction string) (bool, string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	ok, reason := ts.canEnterLocked(symbol, direction)
+	if !ok {
+		return false, reason
+	}
+
+	// Create pending reservation
+	ts.positions[symbol] = &TrendPosition{
+		Symbol:    symbol,
+		Side:      direction,
+		EntryTime: time.Now(),
+		Pending:   true,
+	}
+
+	log.Debug().Str("symbol", symbol).Str("side", direction).Msg("entry reservation created")
+	return true, ""
+}
+
+// ConfirmReservation converts a pending reservation into a real position
+// after the order is filled. Call this instead of RegisterPosition when
+// using the reservation pattern.
+func (ts *TrendStrategy) ConfirmReservation(symbol, side string, entryPrice, size, initialStop, sizeMultiplier float64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	var initialRisk float64
+	if side == "LONG" {
+		initialRisk = entryPrice - initialStop
+	} else {
+		initialRisk = initialStop - entryPrice
+	}
+
+	ts.positions[symbol] = &TrendPosition{
+		Symbol:         symbol,
+		Side:           side,
+		EntryPrice:     entryPrice,
+		EntryTime:      time.Now(),
+		Size:           size,
+		OriginalSize:   size,
+		InitialStop:    initialStop,
+		TrailingStop:   initialStop,
+		InitialRisk:    initialRisk,
+		PartialStage:   0,
+		SizeMultiplier: sizeMultiplier,
+		Pending:        false,
+	}
+
+	log.Debug().Str("symbol", symbol).Str("side", side).Float64("price", entryPrice).Msg("reservation confirmed")
+}
+
+// CancelReservation removes a pending reservation (e.g., on order failure).
+func (ts *TrendStrategy) CancelReservation(symbol string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	pos, exists := ts.positions[symbol]
+	if exists && pos.Pending {
+		delete(ts.positions, symbol)
+		log.Debug().Str("symbol", symbol).Msg("entry reservation cancelled")
+	}
 }
 
 // ---------------------------------------------------------------------------

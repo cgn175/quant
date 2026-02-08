@@ -46,6 +46,8 @@ type BinanceClient struct {
 	testnet       bool
 	conn          *websocket.Conn
 	mu            sync.RWMutex
+	connectMu     sync.Mutex // serializes connection establishment to prevent races
+	connGen       uint64     // connection generation — incremented on each new connection
 	done          chan struct{}
 	subscriptions map[string]*streamSubscription
 	connected     bool
@@ -58,6 +60,7 @@ func NewBinanceClient(testnet bool) *BinanceClient {
 		testnet:       testnet,
 		done:          make(chan struct{}),
 		subscriptions: make(map[string]*streamSubscription),
+		connGen:       0,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -71,6 +74,48 @@ func (c *BinanceClient) combinedURL() string {
 	return binanceCombinedURL
 }
 
+// connectAndStartReadLoop establishes a new WebSocket connection and starts
+// the read loop. Returns the connection generation for the caller to track.
+// Caller must hold connectMu.
+func (c *BinanceClient) connectAndStartReadLoop() (uint64, error) {
+	c.mu.Lock()
+	streams := make([]string, 0, len(c.subscriptions))
+	for stream := range c.subscriptions {
+		streams = append(streams, stream)
+	}
+	c.mu.Unlock()
+
+	if len(streams) == 0 {
+		return 0, nil
+	}
+
+	url := c.combinedURL() + strings.Join(streams, "/")
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to connect to binance ws: %w", err)
+	}
+
+	c.mu.Lock()
+	// Close any existing connection before assigning new one
+	if c.conn != nil {
+		c.conn.Close()
+	}
+	c.conn = conn
+	c.connected = true
+	c.connGen++
+	gen := c.connGen
+	c.mu.Unlock()
+
+	log.Info().Int("streams", len(streams)).Uint64("gen", gen).Msg("connected to binance combined stream")
+
+	// Start read loop with the current generation
+	go c.readLoop(conn, gen)
+
+	return gen, nil
+}
+
+// connect is the legacy connect method — now wraps connectAndStartReadLoop
+// but does NOT start the read loop (for backward compatibility with reconnectWithBackoff).
 func (c *BinanceClient) connect() error {
 	c.mu.Lock()
 	streams := make([]string, 0, len(c.subscriptions))
@@ -92,13 +137,17 @@ func (c *BinanceClient) connect() error {
 	c.mu.Lock()
 	c.conn = conn
 	c.connected = true
+	c.connGen++
 	c.mu.Unlock()
 
-	log.Info().Int("streams", len(streams)).Msg("connected to binance combined stream")
+	log.Info().Int("streams", len(streams)).Uint64("gen", c.connGen).Msg("connected to binance combined stream")
 	return nil
 }
 
 func (c *BinanceClient) reconnectWithBackoff() {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
 	c.mu.Lock()
 	if c.reconnecting {
 		c.mu.Unlock()
@@ -126,7 +175,9 @@ func (c *BinanceClient) reconnectWithBackoff() {
 
 		log.Info().Dur("backoff", backoff).Msg("attempting to reconnect to binance")
 
-		if err := c.connect(); err != nil {
+		// Use connectAndStartReadLoop which handles everything atomically
+		_, err := c.connectAndStartReadLoop()
+		if err != nil {
 			log.Error().Err(err).Dur("backoff", backoff).Msg("reconnection failed, will retry")
 			time.Sleep(backoff)
 			backoff = time.Duration(math.Min(float64(backoff)*backoffFactor, float64(maxBackoff)))
@@ -137,12 +188,15 @@ func (c *BinanceClient) reconnectWithBackoff() {
 		c.reconnecting = false
 		c.mu.Unlock()
 
-		go c.readLoop()
+		// readLoop already started by connectAndStartReadLoop
 		return
 	}
 }
 
 func (c *BinanceClient) ensureConnected() error {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
 	c.mu.RLock()
 	connected := c.connected
 	c.mu.RUnlock()
@@ -151,15 +205,14 @@ func (c *BinanceClient) ensureConnected() error {
 		return nil
 	}
 
-	if err := c.connect(); err != nil {
-		return err
-	}
-
-	go c.readLoop()
-	return nil
+	_, err := c.connectAndStartReadLoop()
+	return err
 }
 
 func (c *BinanceClient) addSubscriptionAndReconnect(sub *streamSubscription) error {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
 	c.mu.Lock()
 	c.subscriptions[sub.stream] = sub
 	wasConnected := c.connected
@@ -174,7 +227,9 @@ func (c *BinanceClient) addSubscriptionAndReconnect(sub *streamSubscription) err
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	return c.ensureConnected()
+	// Use connectAndStartReadLoop for atomic connection + readLoop start
+	_, err := c.connectAndStartReadLoop()
+	return err
 }
 
 func (c *BinanceClient) SubscribeCandles(symbol, interval string, handler CandleHandler) error {
@@ -219,7 +274,10 @@ type combinedStreamMessage struct {
 	Data   json.RawMessage `json:"data"`
 }
 
-func (c *BinanceClient) readLoop() {
+// readLoop reads messages from the WebSocket connection.
+// It takes the connection and its generation to detect stale loops.
+// Only the current connection generation is allowed to trigger reconnects.
+func (c *BinanceClient) readLoop(conn *websocket.Conn, gen uint64) {
 	for {
 		select {
 		case <-c.done:
@@ -227,18 +285,19 @@ func (c *BinanceClient) readLoop() {
 		default:
 		}
 
-		c.mu.RLock()
-		conn := c.conn
-		c.mu.RUnlock()
-
-		if conn == nil {
-			return
-		}
-
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Error().Err(err).Msg("ws read error, initiating reconnect")
-			go c.reconnectWithBackoff()
+			// Check if this is still the current connection before triggering reconnect
+			c.mu.RLock()
+			stillCurrent := (c.conn == conn && c.connGen == gen)
+			c.mu.RUnlock()
+
+			if stillCurrent {
+				log.Error().Err(err).Uint64("gen", gen).Msg("ws read error, initiating reconnect")
+				go c.reconnectWithBackoff()
+			} else {
+				log.Debug().Uint64("gen", gen).Msg("stale readLoop exiting without reconnect")
+			}
 			return
 		}
 
@@ -320,11 +379,26 @@ func parseKlineMessage(data []byte) (Candle, error) {
 
 	k := event.Kline
 
-	open, _ := strconv.ParseFloat(k.Open, 64)
-	high, _ := strconv.ParseFloat(k.High, 64)
-	low, _ := strconv.ParseFloat(k.Low, 64)
-	close, _ := strconv.ParseFloat(k.Close, 64)
-	volume, _ := strconv.ParseFloat(k.Volume, 64)
+	open, err := strconv.ParseFloat(k.Open, 64)
+	if err != nil {
+		return Candle{}, fmt.Errorf("parse open price: %w", err)
+	}
+	high, err := strconv.ParseFloat(k.High, 64)
+	if err != nil {
+		return Candle{}, fmt.Errorf("parse high price: %w", err)
+	}
+	low, err := strconv.ParseFloat(k.Low, 64)
+	if err != nil {
+		return Candle{}, fmt.Errorf("parse low price: %w", err)
+	}
+	closePrice, err := strconv.ParseFloat(k.Close, 64)
+	if err != nil {
+		return Candle{}, fmt.Errorf("parse close price: %w", err)
+	}
+	volume, err := strconv.ParseFloat(k.Volume, 64)
+	if err != nil {
+		return Candle{}, fmt.Errorf("parse volume: %w", err)
+	}
 
 	return Candle{
 		Symbol:    k.Symbol,
@@ -333,7 +407,7 @@ func parseKlineMessage(data []byte) (Candle, error) {
 		Open:      open,
 		High:      high,
 		Low:       low,
-		Close:     close,
+		Close:     closePrice,
 		Volume:    volume,
 		IsClosed:  k.IsClosed,
 	}, nil

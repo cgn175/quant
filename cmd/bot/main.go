@@ -389,6 +389,7 @@ func handleTrendTick(ctx context.Context, tick tickEvent, d trendDepsBundle) {
 }
 
 // handleTrendEntry opens a new position from a trend signal.
+// Uses reservation pattern to prevent TOCTOU race between per-symbol goroutines.
 func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 	// Risk check via risk manager
 	if err := d.riskMgr.CanOpenPosition(sym); err != nil {
@@ -402,9 +403,25 @@ func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 		sizeMultiplier = 1.0
 	}
 
+	var side string
+	if sig.Type == strategy.SignalLong {
+		side = "LONG"
+	} else {
+		side = "SHORT"
+	}
+
+	// Atomically check and reserve the entry slot BEFORE placing order
+	ok, reason := d.trendStrat.TryReserveEntry(sym, side)
+	if !ok {
+		log.Debug().Str("symbol", sym).Str("reason", reason).Msg("reservation blocked trend entry")
+		return
+	}
+
+	// From here, we MUST either ConfirmReservation or CancelReservation
 	equity := d.riskMgr.GetEquity()
 	size := d.trendStrat.CalculatePositionSize(equity, sig.Price, sig.StopLoss, sizeMultiplier)
 	if size <= 0 {
+		d.trendStrat.CancelReservation(sym)
 		return
 	}
 
@@ -415,6 +432,7 @@ func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 
 	if err != nil {
 		log.Error().Err(err).Str("symbol", sym).Msg("failed to open trend position")
+		d.trendStrat.CancelReservation(sym)
 		return
 	}
 
@@ -425,14 +443,8 @@ func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 
 	if order.FilledPrice <= 0 {
 		log.Error().Str("symbol", sym).Msg("trend order filled at zero price, skipping")
+		d.trendStrat.CancelReservation(sym)
 		return
-	}
-
-	var side string
-	if sig.Type == strategy.SignalLong {
-		side = "LONG"
-	} else {
-		side = "SHORT"
 	}
 
 	riskAmount := equity * (d.cfg.Risk.MaxRiskPerTradePct / 100.0) * sizeMultiplier
@@ -440,6 +452,7 @@ func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 	// Register in risk manager
 	if err := d.riskMgr.OpenPosition(sym, side, order.FilledPrice, size, sig.StopLoss, 0, riskAmount); err != nil {
 		log.Error().Err(err).Str("symbol", sym).Msg("failed to register trend position")
+		d.trendStrat.CancelReservation(sym)
 		if cancelErr := d.executor.CancelOrder(sym, order.ID); cancelErr != nil {
 			log.Error().Err(cancelErr).Str("symbol", sym).Str("order_id", order.ID).Msg("CRITICAL: order placed but cannot cancel or register")
 			d.alertMgr.Error("Orphaned Order", fmt.Errorf("symbol=%s order=%s: placed but could not register or cancel", sym, order.ID))
@@ -447,8 +460,8 @@ func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 		return
 	}
 
-	// Register in trend strategy (for trailing stop / partial exit tracking)
-	d.trendStrat.RegisterPosition(sym, side, order.FilledPrice, size, sig.StopLoss, sizeMultiplier)
+	// Confirm the reservation (converts pending -> real position)
+	d.trendStrat.ConfirmReservation(sym, side, order.FilledPrice, size, sig.StopLoss, sizeMultiplier)
 
 	d.prom.PositionSize.WithLabelValues(sym).Set(size)
 
