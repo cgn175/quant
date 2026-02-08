@@ -49,6 +49,7 @@ type TrendConfig struct {
 	DailyLossCapPct    float64 // 0.03 — 3% of equity
 	MaxOpenPositions   int     // 4
 	MaxCorrelatedSame  int     // 2 — max same-direction on correlated pairs
+	MaxPositionsPerSector int  // 1 — max positions in same sector (Patch 3)
 
 	// Partial exit parameters
 	PartialExitEnabled bool
@@ -56,6 +57,30 @@ type TrendConfig struct {
 	FirstExitPct       float64 // 0.25 — close 25%
 	SecondTargetR      float64 // 6.0 — second partial at 6R
 	SecondExitPct      float64 // 0.25 — close 25%
+}
+
+// SectorMap classifies trading symbols by sector for correlation management (Patch 3).
+var SectorMap = map[string]string{
+	"BTCUSDT":  "BTC",
+	"ETHUSDT":  "L1",
+	"SOLUSDT":  "L1",
+	"AVAXUSDT": "L1",
+	"ADAUSDT":  "L1",
+	"FETUSDT":  "AI",
+	"RNDRUSDT": "AI",
+	"WLDUSDT":  "AI",
+	"DOGEUSDT": "MEME",
+	"SHIBUSDT": "MEME",
+	"PEPEUSDT": "MEME",
+	"BNBUSDT":  "EXCHANGE",
+}
+
+// getSector returns the sector for a symbol, defaulting to "OTHER".
+func getSector(symbol string) string {
+	if sector, ok := SectorMap[symbol]; ok {
+		return sector
+	}
+	return "OTHER"
 }
 
 // DefaultTrendConfig returns the default trend-following configuration
@@ -82,6 +107,7 @@ func DefaultTrendConfig() TrendConfig {
 		DailyLossCapPct:    0.03,
 		MaxOpenPositions:   4,
 		MaxCorrelatedSame:  2,
+		MaxPositionsPerSector: 1,
 		PartialExitEnabled: true,
 		FirstTargetR:       3.0,
 		FirstExitPct:       0.25,
@@ -307,6 +333,20 @@ func (ts *TrendStrategy) canEnterLocked(symbol string, direction string) (bool, 
 		return false, "daily_halted"
 	}
 
+	// Sector limit check (Patch 3: Correlation Guard)
+	if ts.config.MaxPositionsPerSector > 0 {
+		newSector := getSector(symbol)
+		sectorCount := 0
+		for _, pos := range ts.positions {
+			if getSector(pos.Symbol) == newSector {
+				sectorCount++
+			}
+		}
+		if sectorCount >= ts.config.MaxPositionsPerSector {
+			return false, "sector_limit"
+		}
+	}
+
 	// Correlation limit: max same-direction positions (includes pending)
 	sameCount := 0
 	for _, pos := range ts.positions {
@@ -488,6 +528,31 @@ func (ts *TrendStrategy) OnBar(
 		return nil
 	}
 
+	// ---------------------------------------------------------------
+	// Whipsaw Defense (Patch 1)
+	// ---------------------------------------------------------------
+
+	// 1a. Candle Color Filter — prevent entering on weak closes
+	isGreenCandle := last.Close > last.Open
+	if longSignal && !isGreenCandle {
+		log.Debug().Str("symbol", symbol).Msg("whipsaw filter blocked LONG (red candle)")
+		return nil
+	}
+	if shortSignal && isGreenCandle {
+		log.Debug().Str("symbol", symbol).Msg("whipsaw filter blocked SHORT (green candle)")
+		return nil
+	}
+
+	// 1b. Dead Market Filter — BB Bandwidth < 10th percentile
+	bbWidth := features.BollingerBandwidth(candles, 20, 2.0)
+	if bbWidth != nil && len(bbWidth) > idx {
+		bbWidthPctile := features.RollingQuantile(bbWidth, 100, 0.10)
+		if bbWidthPctile != nil && len(bbWidthPctile) > idx && bbWidth[idx] < bbWidthPctile[idx] {
+			log.Debug().Str("symbol", symbol).Float64("bb_width", bbWidth[idx]).Float64("threshold", bbWidthPctile[idx]).Msg("dead market filter blocked signal")
+			return nil
+		}
+	}
+
 	// Single atomic check for all strategy-level gating conditions
 	// (position exists, max positions, daily halt, correlation limit).
 	direction := "LONG"
@@ -626,16 +691,34 @@ func (ts *TrendStrategy) UpdateTrailingStop(
 			if pos.Side == "LONG" {
 				hhVals := features.HighestHigh(candles, cfg.ChandelierLookback)
 				if hhVals != nil {
-					newStop := hhVals[idx] - cfg.ATRStopMult*atrVal
+					// Dynamic Chandelier Exit (Patch 2): tighten multiplier as profit increases
+					atrMult := ts.getDynamicATRMultiplier(pos, hhVals[idx])
+					newStop := hhVals[idx] - atrMult*atrVal
 					if newStop > pos.TrailingStop {
+						log.Debug().
+							Str("symbol", symbol).
+							Float64("r_multiple", pos.CurrentR(last.Close)).
+							Float64("atr_mult", atrMult).
+							Float64("old_stop", pos.TrailingStop).
+							Float64("new_stop", newStop).
+							Msg("dynamic chandelier exit updated")
 						pos.TrailingStop = newStop
 					}
 				}
 			} else {
 				llVals := features.LowestLow(candles, cfg.ChandelierLookback)
 				if llVals != nil {
-					newStop := llVals[idx] + cfg.ATRStopMult*atrVal
+					// Dynamic Chandelier Exit (Patch 2): tighten multiplier as profit increases
+					atrMult := ts.getDynamicATRMultiplier(pos, llVals[idx])
+					newStop := llVals[idx] + atrMult*atrVal
 					if newStop < pos.TrailingStop {
+						log.Debug().
+							Str("symbol", symbol).
+							Float64("r_multiple", pos.CurrentR(last.Close)).
+							Float64("atr_mult", atrMult).
+							Float64("old_stop", pos.TrailingStop).
+							Float64("new_stop", newStop).
+							Msg("dynamic chandelier exit updated")
 						pos.TrailingStop = newStop
 					}
 				}
@@ -663,6 +746,37 @@ func (ts *TrendStrategy) UpdateTrailingStop(
 	}
 
 	return nil
+}
+
+// getDynamicATRMultiplier returns the ATR multiplier based on current R-multiple.
+// As profit increases, the multiplier decreases to tighten the stop and lock in profits.
+// Patch 2: Dynamic Chandelier Exit
+func (ts *TrendStrategy) getDynamicATRMultiplier(pos *TrendPosition, currentExtreme float64) float64 {
+	if pos.InitialRisk <= 0 {
+		return ts.config.ATRStopMult
+	}
+
+	// Calculate current profit
+	var currentProfit float64
+	if pos.Side == "LONG" {
+		currentProfit = currentExtreme - pos.EntryPrice
+	} else {
+		currentProfit = pos.EntryPrice - currentExtreme
+	}
+
+	rMultiple := currentProfit / pos.InitialRisk
+
+	// Select multiplier based on profit level
+	switch {
+	case rMultiple > 6:
+		return 1.5
+	case rMultiple > 4:
+		return 2.0
+	case rMultiple > 2:
+		return 2.5
+	default:
+		return ts.config.ATRStopMult // 3.0 default
+	}
 }
 
 // ---------------------------------------------------------------------------

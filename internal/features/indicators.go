@@ -620,3 +620,72 @@ func ChandelierExitShort(candles []exchange.Candle, atrPeriod int, atrMult float
 
 	return result
 }
+
+// ---------------------------------------------------------------------------
+// Bollinger Bandwidth (Patch 1: Whipsaw Defense)
+// ---------------------------------------------------------------------------
+
+// BollingerBandwidth returns (upper - lower) / middle as a percentage for each bar.
+// Used to detect "dead market" conditions where bandwidth is compressed.
+func BollingerBandwidth(candles []exchange.Candle, period int, stdDevMult float64) []float64 {
+	bb := Bollinger(candles, period, stdDevMult)
+	if bb == nil {
+		return nil
+	}
+
+	n := len(candles)
+	result := make([]float64, n)
+
+	for i := period - 1; i < n; i++ {
+		if bb.Middle[i] > 0 {
+			result[i] = (bb.Upper[i] - bb.Lower[i]) / bb.Middle[i]
+		}
+	}
+
+	return result
+}
+
+// RollingQuantile returns the rolling quantile of values over a given window.
+// quantile should be between 0 and 1 (e.g., 0.10 for 10th percentile).
+func RollingQuantile(values []float64, window int, quantile float64) []float64 {
+	n := len(values)
+	if n < window || window < 1 {
+		return nil
+	}
+
+	result := make([]float64, n)
+
+	for i := window - 1; i < n; i++ {
+		// Extract window values
+		windowVals := make([]float64, window)
+		copy(windowVals, values[i-window+1:i+1])
+
+		// Sort window values
+		sortFloat64s(windowVals)
+
+		// Calculate quantile index
+		idx := int(float64(window-1) * quantile)
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= window {
+			idx = window - 1
+		}
+		result[i] = windowVals[idx]
+	}
+
+	return result
+}
+
+// sortFloat64s sorts a slice of float64 in ascending order (simple insertion sort).
+func sortFloat64s(vals []float64) {
+	for i := 1; i < len(vals); i++ {
+		key := vals[i]
+		j := i - 1
+		for j >= 0 && vals[j] > key {
+			vals[j+1] = vals[j]
+			j--
+		}
+		vals[j+1] = key
+	}
+}

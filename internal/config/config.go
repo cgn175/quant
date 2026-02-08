@@ -103,6 +103,7 @@ type StrategyConfig struct {
 	FundingFilter  FundingFilterConfig  `mapstructure:"funding_filter"`
 	PartialExits   PartialExitsConfig   `mapstructure:"partial_exits"`
 	ChandelierLookback int             `mapstructure:"chandelier_lookback"`
+	MaxPositionsPerSector int          `mapstructure:"max_positions_per_sector"` // Patch 3: Correlation Guard
 }
 
 // FundingFilterConfig holds funding rate filter parameters.
@@ -271,6 +272,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.volatility_low", 0.5)
 	v.SetDefault("strategy.volatility_high", 2.5)
 	v.SetDefault("strategy.chandelier_lookback", 10)
+	v.SetDefault("strategy.max_positions_per_sector", 1) // Patch 3: Correlation Guard
 	v.SetDefault("strategy.funding_filter.enabled", true)
 	v.SetDefault("strategy.funding_filter.extreme_threshold", 0.0005)
 	v.SetDefault("strategy.funding_filter.elevated_threshold", 0.0003)
