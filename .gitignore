@@ -25,7 +25,8 @@ Thumbs.db
 !.env.example
 
 # Config with real credentials
-# (keep config.yaml as a template with empty values)
+config.yaml
+# (keep config.yaml.example as a template with empty values)
 
 # Python
 __pycache__/

@@ -78,6 +78,16 @@ func NewManager(cfg Config, log zerolog.Logger) (*Manager, error) {
 	return mgr, nil
 }
 
+// escapeMarkdownV2 escapes special characters for Telegram MarkdownV2.
+func escapeMarkdownV2(s string) string {
+	// Characters that must be escaped in MarkdownV2 (except * which we use for bold)
+	special := []string{"_", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"}
+	for _, ch := range special {
+		s = strings.ReplaceAll(s, ch, "\\"+ch)
+	}
+	return s
+}
+
 // SendAlert sends an alert message
 func (m *Manager) SendAlert(alert Alert) error {
 	if !m.enabled || m.bot == nil {
@@ -96,34 +106,46 @@ func (m *Manager) SendAlert(alert Alert) error {
 	}
 	m.lastAlertMap[key] = time.Now()
 
-	// Format message
+	// Format message with MarkdownV2 escaping
 	emoji := getEmoji(alert.Type)
+	escapedTitle := escapeMarkdownV2(alert.Title)
+	escapedMessage := escapeMarkdownV2(alert.Message)
+	escapedTime := escapeMarkdownV2(alert.Timestamp.Format("15:04:05 MST"))
+
 	msg := fmt.Sprintf(
 		"%s *%s*\n\n%s\n\nTime: %s",
 		emoji,
-		alert.Title,
-		alert.Message,
-		alert.Timestamp.Format("15:04:05 MST"),
+		escapedTitle,
+		escapedMessage,
+		escapedTime,
 	)
 
 	if alert.Symbol != "" {
+		escapedSymbol := escapeMarkdownV2(alert.Symbol)
 		msg = fmt.Sprintf(
-			"%s *%s* (%s)\n\n%s\n\nTime: %s",
+			"%s *%s* \\(%s\\)\n\n%s\n\nTime: %s",
 			emoji,
-			alert.Title,
-			alert.Symbol,
-			alert.Message,
-			alert.Timestamp.Format("15:04:05 MST"),
+			escapedTitle,
+			escapedSymbol,
+			escapedMessage,
+			escapedTime,
 		)
 	}
 
 	msgConfig := tgbotapi.NewMessage(m.chatID, msg)
-	msgConfig.ParseMode = "Markdown"
+	msgConfig.ParseMode = "MarkdownV2"
 
+	// Try MarkdownV2 first; fall back to plain text if parsing fails.
 	_, err := m.bot.Send(msgConfig)
 	if err != nil {
-		m.log.Error().Err(err).Msg("failed to send telegram alert")
-		return err
+		// Retry without parse mode (plain text) — handles unescaped special chars.
+		msgConfig.ParseMode = ""
+		msgConfig.Text = strings.ReplaceAll(msg, "*", "")
+		_, err = m.bot.Send(msgConfig)
+		if err != nil {
+			m.log.Error().Err(err).Msg("failed to send telegram alert")
+			return err
+		}
 	}
 
 	return nil

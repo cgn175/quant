@@ -293,16 +293,23 @@ type binanceKlineEvent struct {
 }
 
 type binanceKline struct {
-	StartTime int64  `json:"t"`
-	CloseTime int64  `json:"T"`
-	Symbol    string `json:"s"`
-	Interval  string `json:"i"`
-	Open      string `json:"o"`
-	Close     string `json:"c"`
-	High      string `json:"h"`
-	Low       string `json:"l"`
-	Volume    string `json:"v"`
-	IsClosed  bool   `json:"x"`
+	StartTime    int64  `json:"t"`
+	CloseTime    int64  `json:"T"`
+	Symbol       string `json:"s"`
+	Interval     string `json:"i"`
+	FirstTradeID int64  `json:"f"`
+	LastTradeID  int64  `json:"L"`
+	Open         string `json:"o"`
+	Close        string `json:"c"`
+	High         string `json:"h"`
+	Low          string `json:"l"`
+	Volume       string `json:"v"`
+	NumTrades    int64  `json:"n"`
+	IsClosed     bool   `json:"x"`
+	QuoteVolume  string `json:"q"`
+	TakerBuyVol  string `json:"V"`
+	TakerBuyQ    string `json:"Q"`
+	Ignore       string `json:"B"`
 }
 
 func parseKlineMessage(data []byte) (Candle, error) {
