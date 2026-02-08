@@ -30,6 +30,11 @@ type Metrics struct {
 	UnrealizedPnLPerSymbol prometheus.GaugeVec
 	SentimentScore       prometheus.GaugeVec
 
+	// Data ingestion metrics
+	CandlesReceived      prometheus.CounterVec // per symbol
+	CandlesClosed        prometheus.CounterVec // per symbol (only closed candles)
+	WebSocketReconnects  prometheus.Counter
+
 	// System metrics
 	ModelInferenceTime   prometheus.Histogram
 	OrderExecutionTime   prometheus.Histogram
@@ -107,6 +112,20 @@ func NewMetrics() *Metrics {
 			Name: "sentiment_score",
 			Help: "Current sentiment score by symbol",
 		}, []string{"symbol"}),
+
+		// Data ingestion metrics
+		CandlesReceived: *promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "binance_candles_received_total",
+			Help: "Total number of candle updates received from Binance WebSocket",
+		}, []string{"symbol"}),
+		CandlesClosed: *promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "binance_candles_closed_total",
+			Help: "Total number of closed candles received from Binance WebSocket",
+		}, []string{"symbol"}),
+		WebSocketReconnects: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "binance_websocket_reconnects_total",
+			Help: "Total number of WebSocket reconnection attempts",
+		}),
 
 		// System metrics
 		ModelInferenceTime: promauto.NewHistogram(prometheus.HistogramOpts{

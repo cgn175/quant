@@ -354,6 +354,12 @@ func trendSymbolLoop(ctx context.Context, symbol string, tickCh <-chan tickEvent
 func handleTrendTick(ctx context.Context, tick tickEvent, d trendDepsBundle) {
 	sym := tick.symbol
 
+	// Track candle metrics
+	d.prom.CandlesReceived.WithLabelValues(sym).Inc()
+	if tick.candle.IsClosed {
+		d.prom.CandlesClosed.WithLabelValues(sym).Inc()
+	}
+
 	// 1. Store candle
 	d.store.Add(tick.candle)
 	candles := d.store.GetAll(sym)
