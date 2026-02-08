@@ -188,6 +188,28 @@ func (m *Manager) OpenPosition(symbol, side string, entryPrice, size, stopLoss, 
 		return fmt.Errorf("position already exists for %s", symbol)
 	}
 
+	// Re-validate constraints under lock to close TOCTOU gap between
+	// CanOpenPosition and OpenPosition (lock is released in between for
+	// network calls).
+	if len(m.positions) >= m.config.MaxOpenPositions {
+		return fmt.Errorf("max open positions (%d) reached", m.config.MaxOpenPositions)
+	}
+
+	m.checkDailyResetLocked()
+	maxDailyLoss := m.equity * (m.config.MaxDailyLossPct / 100.0)
+	if m.dailyPnL < -maxDailyLoss {
+		return fmt.Errorf("daily loss limit exceeded: %.2f (limit: %.2f)", m.dailyPnL, maxDailyLoss)
+	}
+
+	if m.config.MaxLeverage > 0 && m.equity > 0 {
+		proposedNotional := entryPrice * size
+		currentNotional := m.getTotalNotionalLocked()
+		newLeverage := (currentNotional + proposedNotional) / m.equity
+		if newLeverage > m.config.MaxLeverage {
+			return fmt.Errorf("proposed position would result in %.2fx leverage, exceeds max %.2fx", newLeverage, m.config.MaxLeverage)
+		}
+	}
+
 	m.positions[symbol] = &Position{
 		Symbol:     symbol,
 		Side:       side,
@@ -290,6 +312,22 @@ func (m *Manager) ReducePosition(symbol string, exitPrice float64, exitSize floa
 	return netPnL, nil
 }
 
+// UpdateStopLoss updates the stop loss for an existing position. This can
+// be used by trend_following mode to sync RiskManager state with the
+// TrendStrategy's trailing stop (optional — TrendStrategy is authoritative).
+func (m *Manager) UpdateStopLoss(symbol string, newStop float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pos, exists := m.positions[symbol]
+	if !exists {
+		return fmt.Errorf("no position found for %s", symbol)
+	}
+
+	pos.StopLoss = newStop
+	return nil
+}
+
 // GetPosition returns a deep copy of the position for the given symbol.
 // Callers cannot mutate internal state through the returned pointer.
 func (m *Manager) GetPosition(symbol string) (*Position, bool) {
@@ -328,6 +366,13 @@ func (m *Manager) UpdatePositionPnL(symbol string, currentPrice float64) error {
 	return nil
 }
 
+// ShouldClosePosition checks if the position for a given symbol should
+// be closed based on the RiskManager's internal StopLoss and TakeProfit.
+//
+// NOTE: For trend_following mode, TrendStrategy.TrailingStop is the
+// authoritative stop level. TrendStrategy calls UpdateTrailingStop and
+// generates ExitSignals directly. This method is only used by the ML
+// strategy path (runMLStrategy).
 func (m *Manager) ShouldClosePosition(symbol string, currentPrice float64) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

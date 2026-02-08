@@ -488,7 +488,15 @@ func closeTrendPosition(sym string, exitPrice float64, reason string, d trendDep
 
 	netPnL, err := d.riskMgr.ClosePosition(sym, order.FilledPrice)
 	if err != nil {
-		log.Error().Err(err).Str("symbol", sym).Msg("risk manager close failed (trend)")
+		// Order was already filled on the exchange, but risk manager state update failed.
+		// Still remove from TrendStrategy to avoid stale position tracking.
+		log.Error().Err(err).Str("symbol", sym).Msg("CRITICAL: risk manager close failed after order fill — syncing trend strategy anyway")
+		d.alertMgr.Error("Close Position State Desync", fmt.Errorf("symbol=%s: order filled but ClosePosition failed: %w", sym, err))
+		d.trendStrat.RecordPnL(0) // unknown PnL
+		d.trendStrat.RemovePosition(sym)
+		d.prom.TotalTrades.Inc()
+		d.prom.PositionSize.WithLabelValues(sym).Set(0)
+		d.prom.UnrealizedPnLPerSymbol.WithLabelValues(sym).Set(0)
 		return
 	}
 
@@ -548,14 +556,20 @@ func handleTrendPartialExit(sym string, currentPrice float64, partial *strategy.
 	}
 	netPnL, err := d.riskMgr.ReducePosition(sym, order.FilledPrice, exitSize, newStop)
 	if err != nil {
-		log.Error().Err(err).Str("symbol", sym).Msg("risk manager partial close failed")
+		// CRITICAL: Order was already filled on the exchange, but risk manager
+		// state update failed. We must still update TrendStrategy state to avoid
+		// desynchronization (strategy thinking it holds more than it does).
+		log.Error().Err(err).Str("symbol", sym).Msg("CRITICAL: risk manager partial close failed after order fill — syncing trend strategy anyway")
+		d.alertMgr.Error("Partial Exit State Desync", fmt.Errorf("symbol=%s: order filled but ReducePosition failed: %w", sym, err))
+		d.trendStrat.ApplyPartialExit(sym, exitSize, partial.MoveStopBE, partial.NewStop, partial.Reason)
+		d.trendStrat.RecordPnL(0) // unknown PnL, record 0
 		return
 	}
 
 	d.trendStrat.RecordPnL(netPnL)
 
 	// Update trend strategy position
-	d.trendStrat.ApplyPartialExit(sym, exitSize, partial.MoveStopBE, partial.NewStop)
+	d.trendStrat.ApplyPartialExit(sym, exitSize, partial.MoveStopBE, partial.NewStop, partial.Reason)
 
 	log.Info().
 		Str("symbol", sym).
@@ -611,15 +625,25 @@ func logTrendTick(sym string, candles []exchange.Candle, d trendDepsBundle) {
 	}
 }
 
-// fetchAndUpdateFunding fetches funding rates for all symbols and updates the cache.
+// fetchAndUpdateFunding fetches funding rates via a single bulk API call
+// and updates the cache for the configured symbols.
 func fetchAndUpdateFunding(client *exchange.BinanceClient, symbols []string, cache *data.FundingCache) {
-	rates, err := client.FetchFundingRates(symbols)
+	allRates, err := client.FetchAllFundingRates()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to fetch funding rates")
+		log.Warn().Err(err).Msg("failed to fetch bulk funding rates")
 		return
 	}
 
-	for sym, info := range rates {
+	// Build a set for O(1) lookup
+	wanted := make(map[string]struct{}, len(symbols))
+	for _, s := range symbols {
+		wanted[s] = struct{}{}
+	}
+
+	for sym, info := range allRates {
+		if _, ok := wanted[sym]; !ok {
+			continue
+		}
 		cache.Add(sym, data.FundingRate{
 			Symbol:    sym,
 			Rate:      info.FundingRate,

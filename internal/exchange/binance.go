@@ -50,6 +50,7 @@ type BinanceClient struct {
 	subscriptions map[string]*streamSubscription
 	connected     bool
 	reconnecting  bool
+	httpClient    *http.Client // reusable HTTP client with timeout for REST calls
 }
 
 func NewBinanceClient(testnet bool) *BinanceClient {
@@ -57,6 +58,9 @@ func NewBinanceClient(testnet bool) *BinanceClient {
 		testnet:       testnet,
 		done:          make(chan struct{}),
 		subscriptions: make(map[string]*streamSubscription),
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
 	}
 }
 
@@ -324,6 +328,7 @@ func parseKlineMessage(data []byte) (Candle, error) {
 		Low:       low,
 		Close:     close,
 		Volume:    volume,
+		IsClosed:  k.IsClosed,
 	}, nil
 }
 
@@ -406,7 +411,7 @@ type binancePremiumIndex struct {
 func (c *BinanceClient) FetchFundingRate(symbol string) (*FundingRateInfo, error) {
 	url := fmt.Sprintf("%s/fapi/v1/premiumIndex?symbol=%s", c.futuresBaseURL(), symbol)
 
-	resp, err := http.Get(url)
+	resp, err := c.httpClient.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("funding rate HTTP request failed for %s: %w", symbol, err)
 	}
@@ -463,6 +468,51 @@ func (c *BinanceClient) FetchFundingRates(symbols []string) (map[string]*Funding
 	if len(results) == 0 && len(symbols) > 0 {
 		return results, fmt.Errorf("failed to fetch funding rates for all %d symbols", len(symbols))
 	}
+
+	return results, nil
+}
+
+// FetchAllFundingRates fetches funding rates for ALL symbols in a single
+// bulk request to GET /fapi/v1/premiumIndex (no symbol parameter). This
+// is significantly faster than calling FetchFundingRate per-symbol, and
+// the caller can filter by desired symbols.
+func (c *BinanceClient) FetchAllFundingRates() (map[string]*FundingRateInfo, error) {
+	url := fmt.Sprintf("%s/fapi/v1/premiumIndex", c.futuresBaseURL())
+
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("bulk funding rate HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("bulk funding rate read body failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bulk funding rate API error: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	var indices []binancePremiumIndex
+	if err := json.Unmarshal(body, &indices); err != nil {
+		return nil, fmt.Errorf("bulk funding rate JSON parse failed: %w", err)
+	}
+
+	results := make(map[string]*FundingRateInfo, len(indices))
+	for _, idx := range indices {
+		fundingRate, _ := strconv.ParseFloat(idx.LastFundingRate, 64)
+		markPrice, _ := strconv.ParseFloat(idx.MarkPrice, 64)
+
+		results[idx.Symbol] = &FundingRateInfo{
+			Symbol:      idx.Symbol,
+			FundingRate: fundingRate,
+			FundingTime: time.UnixMilli(idx.NextFundingTime),
+			MarkPrice:   markPrice,
+		}
+	}
+
+	log.Debug().Int("count", len(results)).Msg("fetched bulk funding rates")
 
 	return results, nil
 }

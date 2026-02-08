@@ -275,6 +275,43 @@ func (ts *TrendStrategy) checkDailyReset() {
 	}
 }
 
+// CanEnter checks all TrendStrategy-level gating conditions under a single
+// lock to avoid TOCTOU races between per-symbol goroutines. Returns (true, "")
+// if entry is allowed, or (false, reason) if blocked.
+func (ts *TrendStrategy) CanEnter(symbol string, direction string) (bool, string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	// Already have a position for this symbol?
+	if _, exists := ts.positions[symbol]; exists {
+		return false, "position_exists"
+	}
+
+	// Max positions reached?
+	if len(ts.positions) >= ts.config.MaxOpenPositions {
+		return false, "max_positions"
+	}
+
+	// Daily loss cap?
+	ts.checkDailyReset()
+	if ts.dailyHalted {
+		return false, "daily_halted"
+	}
+
+	// Correlation limit: max same-direction positions
+	sameCount := 0
+	for _, pos := range ts.positions {
+		if pos.Side == direction {
+			sameCount++
+		}
+	}
+	if sameCount >= ts.config.MaxCorrelatedSame {
+		return false, "correlated_limit"
+	}
+
+	return true, ""
+}
+
 // ---------------------------------------------------------------------------
 // OnBar — Main entry signal generation (Layer 1 + Layer 2)
 // ---------------------------------------------------------------------------
@@ -297,22 +334,6 @@ func (ts *TrendStrategy) OnBar(
 	n := len(candles)
 
 	if n < cfg.MinCandles() {
-		return nil
-	}
-
-	// Already have a position? No new entry.
-	if ts.HasPosition(symbol) {
-		return nil
-	}
-
-	// Max positions reached?
-	if ts.OpenPositionCount() >= cfg.MaxOpenPositions {
-		return nil
-	}
-
-	// Daily loss cap?
-	if ts.IsDailyHalted() {
-		log.Debug().Str("symbol", symbol).Msg("daily loss cap active, skipping entry")
 		return nil
 	}
 
@@ -388,17 +409,15 @@ func (ts *TrendStrategy) OnBar(
 		return nil
 	}
 
-	// Correlation-aware exposure: max N positions in same direction
-	{
-		direction := "LONG"
-		if shortSignal {
-			direction = "SHORT"
-		}
-		sameCount := ts.countSameDirection(direction)
-		if sameCount >= cfg.MaxCorrelatedSame {
-			log.Debug().Str("symbol", symbol).Str("direction", direction).Int("count", sameCount).Msg("max correlated same-direction positions reached")
-			return nil
-		}
+	// Single atomic check for all strategy-level gating conditions
+	// (position exists, max positions, daily halt, correlation limit).
+	direction := "LONG"
+	if shortSignal {
+		direction = "SHORT"
+	}
+	if ok, reason := ts.CanEnter(symbol, direction); !ok {
+		log.Debug().Str("symbol", symbol).Str("reason", reason).Msg("entry blocked")
+		return nil
 	}
 
 	// ---------------------------------------------------------------
@@ -491,6 +510,11 @@ func (ts *TrendStrategy) OnBar(
 
 // UpdateTrailingStop updates the trailing stop for an existing position.
 // The trailing stop only tightens (never moves against the position).
+//
+// Stop level is only recomputed when the last candle is closed (IsClosed=true)
+// to avoid intra-bar whipsaws from transient price extremes. The stop-hit
+// check runs on every tick regardless.
+//
 // Returns an ExitSignal if the current bar's low/high has breached the stop.
 func (ts *TrendStrategy) UpdateTrailingStop(
 	symbol string,
@@ -512,49 +536,44 @@ func (ts *TrendStrategy) UpdateTrailingStop(
 
 	last := candles[n-1]
 
-	// Compute Chandelier stop for this bar
-	atrVals := features.ATR(candles, cfg.ATRPeriod)
-	if atrVals == nil {
-		return nil
+	// Only tighten the trailing stop on closed bars to avoid
+	// intra-bar whipsaws from transient price extremes.
+	if last.IsClosed {
+		atrVals := features.ATR(candles, cfg.ATRPeriod)
+		if atrVals != nil {
+			idx := n - 1
+			atrVal := atrVals[idx]
+
+			if pos.Side == "LONG" {
+				hhVals := features.HighestHigh(candles, cfg.ChandelierLookback)
+				if hhVals != nil {
+					newStop := hhVals[idx] - cfg.ATRStopMult*atrVal
+					if newStop > pos.TrailingStop {
+						pos.TrailingStop = newStop
+					}
+				}
+			} else {
+				llVals := features.LowestLow(candles, cfg.ChandelierLookback)
+				if llVals != nil {
+					newStop := llVals[idx] + cfg.ATRStopMult*atrVal
+					if newStop < pos.TrailingStop {
+						pos.TrailingStop = newStop
+					}
+				}
+			}
+		}
 	}
-	idx := n - 1
-	atrVal := atrVals[idx]
 
+	// Check if stop hit (always, even intrabar)
 	if pos.Side == "LONG" {
-		// Chandelier long: highest_high(lookback) - ATR * mult
-		hhVals := features.HighestHigh(candles, cfg.ChandelierLookback)
-		if hhVals == nil {
-			return nil
-		}
-		newStop := hhVals[idx] - cfg.ATRStopMult*atrVal
-
-		// Trailing stop only tightens (moves up for longs)
-		if newStop > pos.TrailingStop {
-			pos.TrailingStop = newStop
-		}
-
-		// Check if stop hit (use low of current bar for intrabar stop)
 		if last.Low <= pos.TrailingStop {
 			return &ExitSignal{
 				Symbol: symbol,
 				Reason: "trailing_stop",
-				Price:  pos.TrailingStop, // exit at stop level
+				Price:  pos.TrailingStop,
 			}
 		}
 	} else {
-		// Chandelier short: lowest_low(lookback) + ATR * mult
-		llVals := features.LowestLow(candles, cfg.ChandelierLookback)
-		if llVals == nil {
-			return nil
-		}
-		newStop := llVals[idx] + cfg.ATRStopMult*atrVal
-
-		// Trailing stop only tightens (moves down for shorts)
-		if newStop < pos.TrailingStop {
-			pos.TrailingStop = newStop
-		}
-
-		// Check if stop hit (use high of current bar)
 		if last.High >= pos.TrailingStop {
 			return &ExitSignal{
 				Symbol: symbol,
@@ -592,10 +611,12 @@ func (ts *TrendStrategy) CheckPartialExit(
 	currentR := pos.CurrentR(currentPrice)
 
 	// Check 6R target first (stage 1 -> stage 2)
+	// NOTE: PartialStage is NOT advanced here — it is advanced in
+	// ApplyPartialExit after the order is confirmed filled. This prevents
+	// state corruption if the order fails.
 	if pos.PartialStage == 1 && currentR >= ts.config.SecondTargetR {
 		exitSize := pos.Size * ts.config.SecondExitPct
 		if exitSize > 0 {
-			pos.PartialStage = 2
 			return &PartialExitSignal{
 				Symbol:     symbol,
 				ExitPct:    ts.config.SecondExitPct,
@@ -610,7 +631,6 @@ func (ts *TrendStrategy) CheckPartialExit(
 	if pos.PartialStage == 0 && currentR >= ts.config.FirstTargetR {
 		exitSize := pos.Size * ts.config.FirstExitPct
 		if exitSize > 0 {
-			pos.PartialStage = 1
 			return &PartialExitSignal{
 				Symbol:     symbol,
 				ExitPct:    ts.config.FirstExitPct,
@@ -625,9 +645,15 @@ func (ts *TrendStrategy) CheckPartialExit(
 	return nil
 }
 
-// ApplyPartialExit reduces position size and optionally moves the stop to
-// breakeven. Called after the partial exit order is successfully filled.
-func (ts *TrendStrategy) ApplyPartialExit(symbol string, exitSize float64, moveStopBE bool, newStop float64) {
+// ApplyPartialExit reduces position size, advances the partial exit stage,
+// and optionally moves the stop to breakeven. Called after the partial exit
+// order is successfully filled.
+//
+// The `reason` parameter ("partial_3r" or "partial_6r") determines which
+// stage transition occurs. Stage advancement is deferred to this method
+// (rather than CheckPartialExit) so that a failed order does not corrupt
+// the state machine.
+func (ts *TrendStrategy) ApplyPartialExit(symbol string, exitSize float64, moveStopBE bool, newStop float64, reason string) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -643,6 +669,13 @@ func (ts *TrendStrategy) ApplyPartialExit(symbol string, exitSize float64, moveS
 
 	if moveStopBE && newStop > 0 {
 		pos.TrailingStop = newStop
+	}
+
+	// Advance partial stage based on which exit was filled
+	if reason == "partial_3r" {
+		pos.PartialStage = 1
+	} else if reason == "partial_6r" {
+		pos.PartialStage = 2
 	}
 }
 

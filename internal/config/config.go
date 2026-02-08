@@ -128,6 +128,76 @@ func (c *Config) IsTrendFollowing() bool {
 	return c.Strategy.Type == "trend_following"
 }
 
+// Validate checks configuration values for correctness.
+func (c *Config) Validate() error {
+	// Risk parameters (apply to all strategies)
+	if c.Risk.MaxRiskPerTradePct <= 0 || c.Risk.MaxRiskPerTradePct >= 100 {
+		return fmt.Errorf("risk.max_risk_per_trade_pct must be > 0 and < 100, got %.2f", c.Risk.MaxRiskPerTradePct)
+	}
+	if c.Risk.MaxDailyLossPct <= 0 || c.Risk.MaxDailyLossPct >= 100 {
+		return fmt.Errorf("risk.max_daily_loss_pct must be > 0 and < 100, got %.2f", c.Risk.MaxDailyLossPct)
+	}
+	if c.Risk.MaxOpenPositions <= 0 {
+		return fmt.Errorf("risk.max_open_positions must be > 0, got %d", c.Risk.MaxOpenPositions)
+	}
+	if c.Risk.MaxLeverage <= 0 {
+		return fmt.Errorf("risk.max_leverage must be > 0, got %.2f", c.Risk.MaxLeverage)
+	}
+
+	// Trend-following-specific validation
+	if c.IsTrendFollowing() {
+		s := c.Strategy
+		if s.DonchianPeriod <= 0 {
+			return fmt.Errorf("strategy.donchian_period must be > 0, got %d", s.DonchianPeriod)
+		}
+		if s.EMAFast <= 0 {
+			return fmt.Errorf("strategy.ema_fast must be > 0, got %d", s.EMAFast)
+		}
+		if s.EMASlow <= s.EMAFast {
+			return fmt.Errorf("strategy.ema_slow (%d) must be > ema_fast (%d)", s.EMASlow, s.EMAFast)
+		}
+		if s.EMATrend <= 0 {
+			return fmt.Errorf("strategy.ema_trend must be > 0, got %d", s.EMATrend)
+		}
+		if s.ATRPeriod <= 0 {
+			return fmt.Errorf("strategy.atr_period must be > 0, got %d", s.ATRPeriod)
+		}
+		if s.ATRStopMult <= 0 {
+			return fmt.Errorf("strategy.atr_stop_multiplier must be > 0, got %.2f", s.ATRStopMult)
+		}
+		if s.ADXPeriod <= 0 {
+			return fmt.Errorf("strategy.adx_period must be > 0, got %d", s.ADXPeriod)
+		}
+		if s.ADXThreshold <= 0 {
+			return fmt.Errorf("strategy.adx_threshold must be > 0, got %.2f", s.ADXThreshold)
+		}
+		if s.VolatilityLow >= s.VolatilityHigh {
+			return fmt.Errorf("strategy.volatility_low (%.2f) must be < volatility_high (%.2f)", s.VolatilityLow, s.VolatilityHigh)
+		}
+		if s.ChandelierLookback <= 0 {
+			return fmt.Errorf("strategy.chandelier_lookback must be > 0, got %d", s.ChandelierLookback)
+		}
+
+		// Partial exits validation
+		if s.PartialExits.Enabled {
+			if s.PartialExits.FirstTargetR <= 0 {
+				return fmt.Errorf("strategy.partial_exits.first_target_r must be > 0, got %.2f", s.PartialExits.FirstTargetR)
+			}
+			if s.PartialExits.SecondTargetR <= s.PartialExits.FirstTargetR {
+				return fmt.Errorf("strategy.partial_exits.second_target_r (%.2f) must be > first_target_r (%.2f)", s.PartialExits.SecondTargetR, s.PartialExits.FirstTargetR)
+			}
+			if s.PartialExits.FirstExitPct <= 0 || s.PartialExits.FirstExitPct > 1.0 {
+				return fmt.Errorf("strategy.partial_exits.first_exit_pct must be > 0 and <= 1.0, got %.2f", s.PartialExits.FirstExitPct)
+			}
+			if s.PartialExits.SecondExitPct <= 0 || s.PartialExits.SecondExitPct > 1.0 {
+				return fmt.Errorf("strategy.partial_exits.second_exit_pct must be > 0 and <= 1.0, got %.2f", s.PartialExits.SecondExitPct)
+			}
+		}
+	}
+
+	return nil
+}
+
 func Load(path string) (*Config, error) {
 	v := viper.New()
 
@@ -147,6 +217,10 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
 	return &cfg, nil

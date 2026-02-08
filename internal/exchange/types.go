@@ -11,6 +11,7 @@ type Candle struct {
 	Low       float64
 	Close     float64
 	Volume    float64
+	IsClosed  bool // true when this is the final update for this bar
 }
 
 type OrderBook struct {
