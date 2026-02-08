@@ -78,14 +78,33 @@ func NewManager(cfg Config, log zerolog.Logger) (*Manager, error) {
 	return mgr, nil
 }
 
+// mdv2Replacer escapes all special characters for Telegram MarkdownV2.
+// Order matters: backslash must be escaped first to avoid double-escaping.
+var mdv2Replacer = strings.NewReplacer(
+	`\`, `\\`,
+	`_`, `\_`,
+	`*`, `\*`,
+	`[`, `\[`,
+	`]`, `\]`,
+	`(`, `\(`,
+	`)`, `\)`,
+	`~`, `\~`,
+	"`", "\\`",
+	`>`, `\>`,
+	`#`, `\#`,
+	`+`, `\+`,
+	`-`, `\-`,
+	`=`, `\=`,
+	`|`, `\|`,
+	`{`, `\{`,
+	`}`, `\}`,
+	`.`, `\.`,
+	`!`, `\!`,
+)
+
 // escapeMarkdownV2 escapes special characters for Telegram MarkdownV2.
 func escapeMarkdownV2(s string) string {
-	// Characters that must be escaped in MarkdownV2 (except * which we use for bold)
-	special := []string{"_", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"}
-	for _, ch := range special {
-		s = strings.ReplaceAll(s, ch, "\\"+ch)
-	}
-	return s
+	return mdv2Replacer.Replace(s)
 }
 
 // SendAlert sends an alert message
