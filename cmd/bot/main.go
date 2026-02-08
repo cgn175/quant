@@ -667,14 +667,17 @@ func handleTrendPartialExit(sym string, currentPrice float64, partial *strategy.
 	// Update trend strategy position
 	d.trendStrat.ApplyPartialExit(sym, exitSize, partial.MoveStopBE, partial.NewStop, partial.Reason)
 
+	remainingSize := pos.Size - exitSize
 	log.Info().
 		Str("symbol", sym).
 		Str("reason", partial.Reason).
 		Float64("exit_size", exitSize).
-		Float64("remaining", pos.Size-exitSize).
+		Float64("remaining", remainingSize).
 		Float64("pnl", netPnL).
 		Bool("stop_to_be", partial.MoveStopBE).
 		Msg("trend partial exit executed")
+
+	d.alertMgr.PartialExit(sym, pos.Side, pos.EntryPrice, order.FilledPrice, exitSize, remainingSize, netPnL, partial.Reason, partial.MoveStopBE)
 }
 
 // logTrendTick emits a structured log line for each processed trend candle.

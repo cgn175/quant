@@ -418,6 +418,40 @@ func (m *Manager) TradeClosed(symbol string, side string, entryPrice, exitPrice,
 	return m.SendAlert(alert)
 }
 
+// PartialExit sends alert when a partial position is closed at an R-target
+func (m *Manager) PartialExit(symbol string, side string, entryPrice, exitPrice, exitSize, remainingSize, pnl float64, reason string, stopMovedToBE bool) error {
+	// Map reason to human-readable label
+	reasonLabel := reason
+	switch reason {
+	case "partial_3r":
+		reasonLabel = "3R Target"
+	case "partial_6r":
+		reasonLabel = "6R Target"
+	}
+
+	pnlPct := 0.0
+	if entryPrice > 0 && exitSize > 0 {
+		pnlPct = (pnl / (entryPrice * exitSize)) * 100
+	}
+
+	stopNote := ""
+	if stopMovedToBE {
+		stopNote = "\n⚡ Stop moved to breakeven"
+	}
+
+	alert := Alert{
+		Type:      AlertTypeInfo,
+		Title:     fmt.Sprintf("Partial Exit (%s)", reasonLabel),
+		Symbol:    symbol,
+		Timestamp: time.Now(),
+		Message: fmt.Sprintf(
+			"Symbol: %s\nSide: %s\nEntry: $%.2f\nExit: $%.2f\nClosed: %.4f\nRemaining: %.4f\nPnL: $%.2f (%.2f%%)%s",
+			symbol, strings.ToUpper(side), entryPrice, exitPrice, exitSize, remainingSize, pnl, pnlPct, stopNote,
+		),
+	}
+	return m.SendAlert(alert)
+}
+
 // DailyPnLSummary sends daily summary
 func (m *Manager) DailyPnLSummary(totalPnL, equity, winRate float64, trades int) error {
 	alertType := AlertTypeInfo
