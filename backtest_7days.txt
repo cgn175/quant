@@ -1,0 +1,26 @@
+
+=== BACKTEST RESULTS ===
+Period:          2026-01-31 to 2026-02-07 (0 days)
+Initial Equity:  $10000.00
+Final Equity:    $10000.00
+Net PnL:         $0.00 (0.00%)
+Gross PnL:       $0.00
+
+Total Trades:    0
+Winning Trades:  0
+Losing Trades:   0
+Win Rate:        0.00%
+Profit Factor:   0.00
+Avg PnL/Trade:   $0.00
+
+Max Drawdown:    0.00%
+Sharpe Ratio:    0.00
+========================
+
+No trades to analyze.
+
+No trades to aggregate.
+
+No trades to analyze.
+
+No trades executed.

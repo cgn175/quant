@@ -239,6 +239,57 @@ func (m *Manager) ClosePosition(symbol string, exitPrice float64) (float64, erro
 	return netPnL, nil
 }
 
+// ReducePosition reduces an existing position's size and optionally updates
+// the stop loss. Returns the realized PnL for the exited portion (after fees).
+// This is used for partial exits in trend following.
+func (m *Manager) ReducePosition(symbol string, exitPrice float64, exitSize float64, newStopLoss float64) (float64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pos, exists := m.positions[symbol]
+	if !exists {
+		return 0, fmt.Errorf("no position found for %s", symbol)
+	}
+
+	if exitSize <= 0 || exitSize > pos.Size {
+		return 0, fmt.Errorf("invalid exit size %.6f (position size: %.6f)", exitSize, pos.Size)
+	}
+
+	// Compute PnL on the exited portion
+	var grossPnL float64
+	if pos.Side == "LONG" {
+		grossPnL = (exitPrice - pos.EntryPrice) * exitSize
+	} else {
+		grossPnL = (pos.EntryPrice - exitPrice) * exitSize
+	}
+
+	// Fees on the exited portion only
+	feePct := m.config.FeePercent / 100.0
+	entryFees := pos.EntryPrice * exitSize * feePct
+	exitFees := exitPrice * exitSize * feePct
+	netPnL := grossPnL - entryFees - exitFees
+
+	// Update equity and daily PnL
+	m.equity += netPnL
+	m.dailyPnL += netPnL
+	m.realizedPnL += netPnL
+
+	// Reduce position size
+	pos.Size -= exitSize
+
+	// Update stop loss if requested
+	if newStopLoss > 0 {
+		pos.StopLoss = newStopLoss
+	}
+
+	// If position is fully closed, remove it
+	if pos.Size <= 0 {
+		delete(m.positions, symbol)
+	}
+
+	return netPnL, nil
+}
+
 // GetPosition returns a deep copy of the position for the given symbol.
 // Callers cannot mutate internal state through the returned pointer.
 func (m *Manager) GetPosition(symbol string) (*Position, bool) {

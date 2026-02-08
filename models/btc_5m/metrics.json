@@ -1,0 +1,29 @@
+{
+  "train_accuracy": 0.9273103645188921,
+  "val_accuracy": 0.8861235366898258,
+  "train_f1_weighted": 0.9050294305225466,
+  "val_f1_weighted": 0.8502441059340201,
+  "train_size": 84056,
+  "val_size": 21014,
+  "symbols": [
+    "BTC/USDT"
+  ],
+  "threshold": 0.002,
+  "best_params": {
+    "objective": "multi:softprob",
+    "num_class": 3,
+    "eval_metric": "mlogloss",
+    "tree_method": "hist",
+    "random_state": 42,
+    "max_depth": 5,
+    "learning_rate": 0.16858944299051,
+    "n_estimators": 319,
+    "min_child_weight": 6,
+    "subsample": 0.8243807039860023,
+    "colsample_bytree": 0.6735605205900206,
+    "reg_alpha": 1.2445277839424592e-07,
+    "reg_lambda": 6.674644574655604e-07,
+    "device": "cuda"
+  },
+  "n_features": 33
+}

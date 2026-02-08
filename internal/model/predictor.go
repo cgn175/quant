@@ -34,17 +34,25 @@ type Predictor struct {
 	inputTensor  *ort.Tensor[float32]
 	outputTensor *ort.Tensor[float32]
 	numFeatures  int64
+	numClasses   int
 	mu           sync.Mutex
 }
 
-func NewPredictor(modelPath string, numFeatures int) (*Predictor, error) {
+// NewPredictor creates a predictor with the specified output class count.
+// Use numClasses=3 for multi-class (DOWN/NEUTRAL/UP) models.
+// Use numClasses=2 for binary (DOWN/UP) models.
+func NewPredictor(modelPath string, numFeatures int, numClasses int) (*Predictor, error) {
+	if numClasses < 2 || numClasses > 3 {
+		return nil, fmt.Errorf("numClasses must be 2 or 3, got %d", numClasses)
+	}
+
 	inputShape := ort.NewShape(1, int64(numFeatures))
 	inputTensor, err := ort.NewEmptyTensor[float32](inputShape)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create input tensor: %w", err)
 	}
 
-	outputShape := ort.NewShape(1, 3)
+	outputShape := ort.NewShape(1, int64(numClasses))
 	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
 	if err != nil {
 		inputTensor.Destroy()
@@ -70,6 +78,7 @@ func NewPredictor(modelPath string, numFeatures int) (*Predictor, error) {
 		inputTensor:  inputTensor,
 		outputTensor: outputTensor,
 		numFeatures:  int64(numFeatures),
+		numClasses:   numClasses,
 	}, nil
 }
 
@@ -91,10 +100,23 @@ func (p *Predictor) Predict(features []float64) (*Prediction, error) {
 	}
 
 	outputData := p.outputTensor.GetData()
-	if len(outputData) < 3 {
-		return nil, fmt.Errorf("unexpected output size: %d", len(outputData))
+	if len(outputData) < p.numClasses {
+		return nil, fmt.Errorf("unexpected output size: %d (expected %d)", len(outputData), p.numClasses)
 	}
 
+	if p.numClasses == 2 {
+		// Binary model: output is [P(DOWN), P(UP)]
+		// Map to Prediction with ProbNeutral=0 so that:
+		//   - isValidPrediction() sum check passes (ProbDown + 0 + ProbUp ≈ 1.0)
+		//   - ArgMax() works correctly (ProbNeutral=0 can never win)
+		return &Prediction{
+			ProbDown:    float64(outputData[0]),
+			ProbNeutral: 0,
+			ProbUp:      float64(outputData[1]),
+		}, nil
+	}
+
+	// 3-class model: output is [P(DOWN), P(NEUTRAL), P(UP)]
 	return &Prediction{
 		ProbDown:    float64(outputData[0]),
 		ProbNeutral: float64(outputData[1]),

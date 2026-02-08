@@ -13,6 +13,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/risk"
 	"github.com/cgn175/quant-bot/internal/sentiment"
 	"github.com/cgn175/quant-bot/internal/strategy"
+	"github.com/rs/zerolog/log"
 )
 
 // Bar represents a single OHLCV candle
@@ -29,11 +30,12 @@ type Bar struct {
 // toCandle converts a Bar to an exchange.Candle so we can reuse the
 // indicator functions in features/indicators.go which operate on
 // []exchange.Candle.
-func (b *Bar) toCandle() exchange.Candle {
+// The barDuration parameter sets the candle close time offset.
+func (b *Bar) toCandleWithDuration(d time.Duration) exchange.Candle {
 	return exchange.Candle{
 		Symbol:    b.Symbol,
 		OpenTime:  b.Timestamp,
-		CloseTime: b.Timestamp.Add(time.Minute), // assume 1m bars
+		CloseTime: b.Timestamp.Add(d),
 		Open:      b.Open,
 		High:      b.High,
 		Low:       b.Low,
@@ -42,20 +44,28 @@ func (b *Bar) toCandle() exchange.Candle {
 	}
 }
 
+// toCandle converts a Bar to an exchange.Candle assuming 5m bars (legacy).
+func (b *Bar) toCandle() exchange.Candle {
+	return b.toCandleWithDuration(5 * time.Minute)
+}
+
 // Backtest engine replays historical data and simulates trading
 type Engine struct {
-	mu              sync.RWMutex
-	bars            map[string][]*Bar        // symbol -> sorted bars
-	featureBuilder  *features.Builder        // for computing TA indicators
-	strategyEngine  *strategy.Strategy       // signal generation
-	riskManager     *risk.Manager            // position sizing + risk
-	predictor       *model.Predictor         // ML model
-	symbolOrder     []string                 // for deterministic processing
-	currentIdx      map[string]int           // current index per symbol
-	trades          []*Trade                 // closed trades
-	openPositions   map[string]*OpenPosition // open positions during backtest
-	executionConfig ExecutionConfig
-	stats           BacktestStats
+	mu               sync.RWMutex
+	bars             map[string][]*Bar        // symbol -> sorted bars
+	featureBuilder   *features.Builder        // for computing 5m TA indicators
+	featureBuilder4H *features.Builder4H      // for computing 4h TA indicators (nil if 5m mode)
+	strategyEngine   *strategy.Strategy       // signal generation
+	riskManager      *risk.Manager            // position sizing + risk
+	predictor        *model.Predictor         // ML model
+	symbolOrder      []string                 // for deterministic processing
+	currentIdx       map[string]int           // current index per symbol
+	trades           []*Trade                 // closed trades
+	openPositions    map[string]*OpenPosition // open positions during backtest
+	executionConfig  ExecutionConfig
+	stats            BacktestStats
+	barDuration      time.Duration // duration of each bar (5m, 4h, etc.)
+	is4H             bool          // true if running 4h backtest
 
 	// Optional historical sentiment data keyed by symbol.
 	// If nil, sentiment features are zero (placeholder).
@@ -114,7 +124,7 @@ type BacktestStats struct {
 	TotalDaysTraded int
 }
 
-// NewEngine creates a new backtest engine
+// NewEngine creates a new backtest engine (5m mode by default)
 func NewEngine(
 	strategyEngine *strategy.Strategy,
 	riskManager *risk.Manager,
@@ -132,6 +142,31 @@ func NewEngine(
 		openPositions:   make(map[string]*OpenPosition),
 		executionConfig: execConfig,
 		trades:          make([]*Trade, 0),
+		barDuration:     5 * time.Minute,
+		is4H:            false,
+	}
+}
+
+// NewEngine4H creates a backtest engine for 4h timeframe.
+func NewEngine4H(
+	strategyEngine *strategy.Strategy,
+	riskManager *risk.Manager,
+	predictor *model.Predictor,
+	featureBuilder4H *features.Builder4H,
+	execConfig ExecutionConfig,
+) *Engine {
+	return &Engine{
+		bars:             make(map[string][]*Bar),
+		featureBuilder4H: featureBuilder4H,
+		strategyEngine:   strategyEngine,
+		riskManager:      riskManager,
+		predictor:        predictor,
+		currentIdx:       make(map[string]int),
+		openPositions:    make(map[string]*OpenPosition),
+		executionConfig:  execConfig,
+		trades:           make([]*Trade, 0),
+		barDuration:      4 * time.Hour,
+		is4H:             true,
 	}
 }
 
@@ -201,10 +236,27 @@ func (e *Engine) Run() (*BacktestStats, error) {
 	e.mu.Unlock()
 
 	// Minimum bars needed for indicator warm-up (EMA-50 needs ~55 bars).
-	minWarmup := e.featureBuilder.MinCandles()
+	var minWarmup int
+	if e.is4H {
+		minWarmup = e.featureBuilder4H.MinCandles()
+	} else {
+		minWarmup = e.featureBuilder.MinCandles()
+	}
+
+	// Progress reporting
+	progressInterval := maxBarCount / 10
+	if progressInterval < 1000 {
+		progressInterval = 1000
+	}
 
 	// Process each bar in time order
 	for barNum := 0; barNum < maxBarCount; barNum++ {
+		// Progress logging
+		if barNum%progressInterval == 0 && barNum > 0 {
+			progress := float64(barNum) / float64(maxBarCount) * 100
+			log.Info().Int("bar", barNum).Int("total", maxBarCount).Float64("progress_pct", progress).Msg("Backtest progress")
+		}
+
 		e.mu.Lock()
 
 		// Process signals for all symbols at this bar
@@ -224,26 +276,47 @@ func (e *Engine) Run() (*BacktestStats, error) {
 				continue
 			}
 
-			// Build feature vector using the proper indicator pipeline
-			fv := e.buildFeatureVector(symbol, bars, barNum)
-			if fv == nil {
-				continue
-			}
+			// Build features and evaluate signal based on timeframe
+			if e.is4H {
+				fv4h := e.buildFeatureVector4H(symbol, bars, barNum)
+				if fv4h == nil {
+					continue
+				}
 
-			// Get model prediction
-			pred, err := e.predictor.Predict(fv.ToArray())
-			if err != nil {
-				continue
-			}
+				pred, err := e.predictor.Predict(fv4h.ToArray())
+				if err != nil {
+					continue
+				}
 
-			// Evaluate signal
-			signal := e.strategyEngine.Evaluate(fv, pred)
-			if signal == nil {
-				continue
-			}
+				signal := e.strategyEngine.Evaluate4H(fv4h, pred)
+				if signal == nil {
+					continue
+				}
 
-			// Execute signal
-			e.executeSignal(signal, bar)
+				// Execute signal (use 1.0 size multiplier for 4H)
+				e.executeSignal(signal, bar)
+			} else {
+				// Build feature vector using the proper indicator pipeline
+				fv := e.buildFeatureVector(symbol, bars, barNum)
+				if fv == nil {
+					continue
+				}
+
+				// Get model prediction
+				pred, err := e.predictor.Predict(fv.ToArray())
+				if err != nil {
+					continue
+				}
+
+				// Evaluate signal
+				signal := e.strategyEngine.Evaluate(fv, pred)
+				if signal == nil {
+					continue
+				}
+
+				// Execute signal
+				e.executeSignal(signal, bar)
+			}
 		}
 
 		e.mu.Unlock()
@@ -318,7 +391,10 @@ func (e *Engine) executeSignal(signal *strategy.Signal, bar *Bar) {
 		side = "SHORT"
 	}
 
-	sizeMultiplier := e.strategyEngine.ShouldReduceSize(signal.Features)
+	sizeMultiplier := 1.0
+	if !e.is4H {
+		sizeMultiplier = e.strategyEngine.ShouldReduceSize(signal.Features)
+	}
 	size, err := e.riskManager.CalculatePositionSize(symbol, bar.Close, signal.StopLoss, sizeMultiplier)
 	if err != nil {
 		return
@@ -391,7 +467,8 @@ func (e *Engine) closeTrade(symbol string, pos *OpenPosition, exitPrice float64,
 // buildFeatureVector constructs a feature vector for the bar at index barNum
 // by converting the relevant slice of *Bar into []exchange.Candle and
 // delegating to the features.Builder which uses the proper indicator
-// implementations (EMA, RSI, Bollinger, MACD, LogReturn, VolumeRatio).
+// implementations (EMA, RSI, Bollinger, MACD, LogReturn, VolumeRatio,
+// SMA for multi-timeframe, VolumeSurge, PriceVolumeDivergence).
 //
 // This ensures backtested features match the live feature pipeline and the
 // Python training script.
@@ -408,8 +485,8 @@ func (e *Engine) buildFeatureVector(symbol string, bars []*Bar, barNum int) *fea
 	}
 
 	// Convert the window of bars [start..barNum] into []exchange.Candle.
-	// We only need the last `minCandles` bars (plus a small margin for
-	// indicator warm-up); sending too many is fine but wasteful.
+	// Send the full minCandles window so multi-timeframe indicators
+	// (EMA-50 on 1h = 600 bars of 5m) have enough data.
 	start := barNum + 1 - minCandles
 	if start < 0 {
 		start = 0
@@ -431,6 +508,33 @@ func (e *Engine) buildFeatureVector(symbol string, bars []*Bar, barNum int) *fea
 	// computed identically (proper log returns, proper MACD signal line,
 	// correct feature count / order matching the Python training pipeline).
 	fv := e.featureBuilder.Build(candles, sent)
+	return fv
+}
+
+// buildFeatureVector4H constructs a 4H feature vector for the bar at index barNum.
+func (e *Engine) buildFeatureVector4H(symbol string, bars []*Bar, barNum int) *features.FeatureVector4H {
+	if e.featureBuilder4H == nil {
+		return nil
+	}
+
+	minCandles := e.featureBuilder4H.MinCandles()
+
+	if barNum+1 < minCandles {
+		return nil
+	}
+
+	start := barNum + 1 - minCandles
+	if start < 0 {
+		start = 0
+	}
+
+	window := bars[start : barNum+1]
+	candles := make([]exchange.Candle, len(window))
+	for i, b := range window {
+		candles[i] = b.toCandleWithDuration(e.barDuration)
+	}
+
+	fv := e.featureBuilder4H.Build(candles)
 	return fv
 }
 
@@ -512,7 +616,6 @@ func (e *Engine) computeMaxDrawdown() float64 {
 }
 
 // computeSharpe calculates an annualized Sharpe ratio from per-trade returns.
-// Uses 525600 minutes/year as the annualization factor (for 1m bars).
 func (e *Engine) computeSharpe() float64 {
 	if len(e.trades) < 2 {
 		return 0

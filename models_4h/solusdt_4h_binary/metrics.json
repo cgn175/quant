@@ -1,0 +1,27 @@
+{
+  "train_accuracy": 0.5232604906823971,
+  "val_accuracy": 0.5016611295681063,
+  "val_f1": 0.6648793565683646,
+  "train_size": 7459,
+  "val_size": 1505,
+  "best_params": {
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "random_state": 42,
+    "max_depth": 3,
+    "learning_rate": 0.01232327186554114,
+    "n_estimators": 109,
+    "min_child_weight": 4,
+    "subsample": 0.6284096490639277,
+    "colsample_bytree": 0.6422859800280498,
+    "reg_alpha": 6.167288968286346e-06,
+    "reg_lambda": 7.912350666902258e-07,
+    "gamma": 1.4272121736008283,
+    "scale_pos_weight": 1.1829626915441536
+  },
+  "n_features": 33,
+  "symbol": "SOL/USDT",
+  "threshold": 0.005,
+  "timeframe": "4h"
+}

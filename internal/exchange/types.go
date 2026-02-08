@@ -33,3 +33,11 @@ type Client interface {
 	SubscribeOrderBook(symbol string, handler OrderBookHandler) error
 	Close() error
 }
+
+// FundingRateInfo represents a funding rate from the exchange.
+type FundingRateInfo struct {
+	Symbol      string
+	FundingRate float64
+	FundingTime time.Time
+	MarkPrice   float64
+}

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 
-	ort "github.com/yalue/onnxruntime_go"
 	"github.com/rs/zerolog/log"
+	ort "github.com/yalue/onnxruntime_go"
 )
 
 var initialized bool
@@ -59,6 +59,7 @@ func findSharedLibrary() string {
 	searchPaths := []string{
 		libName,
 		filepath.Join(".", libName),
+		filepath.Join("lib/onnxruntime-osx-arm64-1.20.1/lib", libName),
 		filepath.Join("/usr/local/lib", libName),
 		filepath.Join("/usr/lib", libName),
 	}
@@ -67,6 +68,7 @@ func findSharedLibrary() string {
 		searchPaths = append(searchPaths,
 			filepath.Join("/opt/homebrew/lib", libName),
 			filepath.Join("/usr/local/opt/onnxruntime/lib", libName),
+			filepath.Join("/opt/homebrew/Cellar/onnxruntime/1.24.1/lib", libName),
 		)
 	}
 

@@ -1,0 +1,27 @@
+{
+  "train_accuracy": 0.5526641883519207,
+  "val_accuracy": 0.5104408352668214,
+  "val_f1": 0.669106116048092,
+  "train_size": 6456,
+  "val_size": 1293,
+  "best_params": {
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "random_state": 42,
+    "max_depth": 5,
+    "learning_rate": 0.013115137329942291,
+    "n_estimators": 57,
+    "min_child_weight": 4,
+    "subsample": 0.9997435206652595,
+    "colsample_bytree": 0.9169402754658208,
+    "reg_alpha": 1.2514861493216196e-08,
+    "reg_lambda": 6.337911631989605e-05,
+    "gamma": 2.8973445260368975,
+    "scale_pos_weight": 1.199100094645069
+  },
+  "n_features": 33,
+  "symbol": "ETH/USDT",
+  "threshold": 0.005,
+  "timeframe": "4h"
+}

@@ -1,0 +1,29 @@
+{
+  "train_accuracy": 0.9618825544874845,
+  "val_accuracy": 0.8833634719710669,
+  "train_f1_weighted": 0.9594797541911172,
+  "val_f1_weighted": 0.843066986856637,
+  "train_size": 84056,
+  "val_size": 21014,
+  "symbols": [
+    "BNB/USDT"
+  ],
+  "threshold": 0.002,
+  "best_params": {
+    "objective": "multi:softprob",
+    "num_class": 3,
+    "eval_metric": "mlogloss",
+    "tree_method": "hist",
+    "random_state": 42,
+    "max_depth": 9,
+    "learning_rate": 0.2179574045230556,
+    "n_estimators": 253,
+    "min_child_weight": 9,
+    "subsample": 0.9036633851120229,
+    "colsample_bytree": 0.7964368472656219,
+    "reg_alpha": 8.568077137675444e-07,
+    "reg_lambda": 1.9549053412992164e-08,
+    "device": "cuda"
+  },
+  "n_features": 33
+}

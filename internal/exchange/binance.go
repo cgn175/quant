@@ -3,7 +3,9 @@ package exchange
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -372,4 +374,95 @@ func (c *BinanceClient) Close() error {
 	c.subscriptions = make(map[string]*streamSubscription)
 
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Funding Rate REST Polling (Binance Futures API)
+// ---------------------------------------------------------------------------
+
+const (
+	binanceFuturesBaseURL        = "https://fapi.binance.com"
+	binanceFuturesTestnetBaseURL = "https://testnet.binancefuture.com"
+)
+
+func (c *BinanceClient) futuresBaseURL() string {
+	if c.testnet {
+		return binanceFuturesTestnetBaseURL
+	}
+	return binanceFuturesBaseURL
+}
+
+// binancePremiumIndex is the JSON response from GET /fapi/v1/premiumIndex.
+type binancePremiumIndex struct {
+	Symbol          string `json:"symbol"`
+	MarkPrice       string `json:"markPrice"`
+	LastFundingRate string `json:"lastFundingRate"`
+	NextFundingTime int64  `json:"nextFundingTime"`
+	Time            int64  `json:"time"`
+}
+
+// FetchFundingRate fetches the current funding rate for a single symbol
+// from the Binance Futures premiumIndex endpoint (REST, not WebSocket).
+func (c *BinanceClient) FetchFundingRate(symbol string) (*FundingRateInfo, error) {
+	url := fmt.Sprintf("%s/fapi/v1/premiumIndex?symbol=%s", c.futuresBaseURL(), symbol)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("funding rate HTTP request failed for %s: %w", symbol, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("funding rate read body failed for %s: %w", symbol, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("funding rate API error for %s: status=%d body=%s", symbol, resp.StatusCode, string(body))
+	}
+
+	var idx binancePremiumIndex
+	if err := json.Unmarshal(body, &idx); err != nil {
+		return nil, fmt.Errorf("funding rate JSON parse failed for %s: %w", symbol, err)
+	}
+
+	fundingRate, _ := strconv.ParseFloat(idx.LastFundingRate, 64)
+	markPrice, _ := strconv.ParseFloat(idx.MarkPrice, 64)
+
+	info := &FundingRateInfo{
+		Symbol:      idx.Symbol,
+		FundingRate: fundingRate,
+		FundingTime: time.UnixMilli(idx.NextFundingTime),
+		MarkPrice:   markPrice,
+	}
+
+	log.Debug().
+		Str("symbol", symbol).
+		Float64("funding_rate", fundingRate).
+		Float64("mark_price", markPrice).
+		Msg("fetched funding rate")
+
+	return info, nil
+}
+
+// FetchFundingRates fetches funding rates for multiple symbols. Errors for
+// individual symbols are logged but do not prevent other symbols from being
+// fetched. Returns all successfully fetched rates.
+func (c *BinanceClient) FetchFundingRates(symbols []string) (map[string]*FundingRateInfo, error) {
+	results := make(map[string]*FundingRateInfo, len(symbols))
+
+	for _, sym := range symbols {
+		info, err := c.FetchFundingRate(sym)
+		if err != nil {
+			log.Warn().Err(err).Str("symbol", sym).Msg("failed to fetch funding rate, skipping")
+			continue
+		}
+		results[sym] = info
+	}
+
+	if len(results) == 0 && len(symbols) > 0 {
+		return results, fmt.Errorf("failed to fetch funding rates for all %d symbols", len(symbols))
+	}
+
+	return results, nil
 }

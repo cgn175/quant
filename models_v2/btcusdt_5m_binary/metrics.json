@@ -1,0 +1,28 @@
+{
+  "train_accuracy": 0.5164482481947045,
+  "val_accuracy": 0.5025620415954989,
+  "train_f1": 0.6685001833516685,
+  "val_f1": 0.6231255233310498,
+  "train_size": 14956,
+  "val_size": 9953,
+  "best_params": {
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "random_state": 42,
+    "max_depth": 3,
+    "learning_rate": 0.01217439763003675,
+    "n_estimators": 100,
+    "min_child_weight": 6,
+    "subsample": 0.9387439731512621,
+    "colsample_bytree": 0.9620690230170601,
+    "reg_alpha": 0.17158716505132213,
+    "reg_lambda": 3.5617520207663884,
+    "gamma": 1.2830072465144418,
+    "scale_pos_weight": 1.1782954764587366
+  },
+  "model_type": "binary",
+  "n_features": 33,
+  "symbol": "BTC/USDT",
+  "threshold": 0.002
+}

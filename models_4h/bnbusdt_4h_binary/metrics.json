@@ -1,0 +1,27 @@
+{
+  "train_accuracy": 0.5377880184331797,
+  "val_accuracy": 0.5324909747292419,
+  "val_f1": 0.6592105263157895,
+  "train_size": 6510,
+  "val_size": 1108,
+  "best_params": {
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "random_state": 42,
+    "max_depth": 7,
+    "learning_rate": 0.014147277266707715,
+    "n_estimators": 81,
+    "min_child_weight": 9,
+    "subsample": 0.9800658872018307,
+    "colsample_bytree": 0.7803054241205962,
+    "reg_alpha": 3.155288843523814,
+    "reg_lambda": 3.979473385477248e-05,
+    "gamma": 4.736526382483268,
+    "scale_pos_weight": 1.1706965748904383
+  },
+  "n_features": 33,
+  "symbol": "BNB/USDT",
+  "threshold": 0.005,
+  "timeframe": "4h"
+}

@@ -202,3 +202,57 @@ func isValidPrediction(pred *model.Prediction) bool {
 func isNaN(f float64) bool {
 	return f != f
 }
+
+// Evaluate4H evaluates a 4H feature vector against the strategy rules.
+// Unlike Evaluate(), this method does not apply sentiment filters since
+// the 4H model has no sentiment features.
+func (s *Strategy) Evaluate4H(fv *features.FeatureVector4H, pred *model.Prediction) *Signal {
+	if fv == nil || pred == nil {
+		return nil
+	}
+
+	// Validate prediction probabilities
+	if !isValidPrediction(pred) {
+		return nil
+	}
+
+	signal := &Signal{
+		Symbol:     fv.Symbol,
+		Timestamp:  fv.Timestamp,
+		Price:      fv.Close,
+		Prediction: pred,
+		Features:   nil, // 4H uses FeatureVector4H, not FeatureVector
+		Confidence: 0,
+	}
+
+	// Check volume filter
+	if fv.VolumeRatio < s.config.MinVolumeRatio {
+		return nil
+	}
+
+	// Evaluate long signal (no sentiment filter for 4H)
+	if s.config.AllowLong && pred.ProbUp >= s.config.ThresholdUp {
+		signal.Type = SignalLong
+		signal.Confidence = pred.ProbUp
+		signal.StopLoss = fv.Close * (1.0 - s.config.StopLossPercent/100.0)
+		signal.TakeProfit = fv.Close * (1.0 + s.config.TakeProfitPercent/100.0)
+		return signal
+	}
+
+	// Evaluate short signal (no sentiment filter for 4H)
+	if s.config.AllowShort && pred.ProbDown >= s.config.ThresholdDown {
+		signal.Type = SignalShort
+		signal.Confidence = pred.ProbDown
+		signal.StopLoss = fv.Close * (1.0 + s.config.StopLossPercent/100.0)
+		signal.TakeProfit = fv.Close * (1.0 - s.config.TakeProfitPercent/100.0)
+		return signal
+	}
+
+	return nil
+}
+
+// ShouldReduceSize4H returns the position size multiplier for 4H trades.
+// Since 4H models don't have sentiment features, no size reduction is applied.
+func (s *Strategy) ShouldReduceSize4H(fv *features.FeatureVector4H) float64 {
+	return 1.0
+}

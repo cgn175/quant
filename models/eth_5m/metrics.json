@@ -1,0 +1,29 @@
+{
+  "train_accuracy": 0.849314742552584,
+  "val_accuracy": 0.816550870848006,
+  "train_f1_weighted": 0.8196830919037019,
+  "val_f1_weighted": 0.7686928104168138,
+  "train_size": 84056,
+  "val_size": 21014,
+  "symbols": [
+    "ETH/USDT"
+  ],
+  "threshold": 0.002,
+  "best_params": {
+    "objective": "multi:softprob",
+    "num_class": 3,
+    "eval_metric": "mlogloss",
+    "tree_method": "hist",
+    "random_state": 42,
+    "max_depth": 6,
+    "learning_rate": 0.17601269752006393,
+    "n_estimators": 451,
+    "min_child_weight": 6,
+    "subsample": 0.8243708381320431,
+    "colsample_bytree": 0.7162581387579499,
+    "reg_alpha": 2.543694104121254e-08,
+    "reg_lambda": 7.128715534402088e-07,
+    "device": "cuda"
+  },
+  "n_features": 33
+}

@@ -18,6 +18,7 @@ type Config struct {
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
 	Alerts     AlertsConfig     `mapstructure:"alerts"`
 	Mode       string           `mapstructure:"mode"`
+	Strategy   StrategyConfig   `mapstructure:"strategy"`
 }
 
 type ExchangeConfig struct {
@@ -56,6 +57,8 @@ type ModelConfig struct {
 	RuntimeLibPath string  `mapstructure:"runtime_lib_path"`
 	ThresholdUp    float64 `mapstructure:"threshold_up"`
 	ThresholdDown  float64 `mapstructure:"threshold_down"`
+	NumClasses     int     `mapstructure:"num_classes"` // 2 for binary, 3 for multi-class (default: 3)
+	Timeframe      string  `mapstructure:"timeframe"`   // "5m", "4h" (default: "5m")
 }
 
 type ExecutionConfig struct {
@@ -80,6 +83,49 @@ type MonitoringConfig struct {
 type AlertsConfig struct {
 	TelegramBotToken string `mapstructure:"telegram_bot_token"`
 	TelegramChatID   int64  `mapstructure:"telegram_chat_id"`
+}
+
+// StrategyConfig holds strategy-specific settings.
+type StrategyConfig struct {
+	Type           string              `mapstructure:"type"` // "ml", "trend_following"
+	DonchianPeriod int                 `mapstructure:"donchian_period"`
+	EMAFast        int                 `mapstructure:"ema_fast"`
+	EMASlow        int                 `mapstructure:"ema_slow"`
+	EMAConfirmBars int                 `mapstructure:"ema_confirm_bars"`
+	EMATrend       int                 `mapstructure:"ema_trend"`
+	VolumePeriod   int                 `mapstructure:"volume_period"`
+	ATRPeriod      int                 `mapstructure:"atr_period"`
+	ATRStopMult    float64             `mapstructure:"atr_stop_multiplier"`
+	ADXPeriod      int                 `mapstructure:"adx_period"`
+	ADXThreshold   float64             `mapstructure:"adx_threshold"`
+	VolatilityLow  float64             `mapstructure:"volatility_low"`
+	VolatilityHigh float64             `mapstructure:"volatility_high"`
+	FundingFilter  FundingFilterConfig  `mapstructure:"funding_filter"`
+	PartialExits   PartialExitsConfig   `mapstructure:"partial_exits"`
+	ChandelierLookback int             `mapstructure:"chandelier_lookback"`
+}
+
+// FundingFilterConfig holds funding rate filter parameters.
+type FundingFilterConfig struct {
+	Enabled            bool    `mapstructure:"enabled"`
+	ExtremeThreshold   float64 `mapstructure:"extreme_threshold"`
+	ElevatedThreshold  float64 `mapstructure:"elevated_threshold"`
+	SizeReduction      float64 `mapstructure:"size_reduction"`
+	PollIntervalSec    int     `mapstructure:"poll_interval_seconds"`
+}
+
+// PartialExitsConfig holds partial exit parameters.
+type PartialExitsConfig struct {
+	Enabled        bool    `mapstructure:"enabled"`
+	FirstTargetR   float64 `mapstructure:"first_target_r"`
+	FirstExitPct   float64 `mapstructure:"first_exit_pct"`
+	SecondTargetR  float64 `mapstructure:"second_target_r"`
+	SecondExitPct  float64 `mapstructure:"second_exit_pct"`
+}
+
+// IsTrendFollowing returns true if the strategy type is trend_following.
+func (c *Config) IsTrendFollowing() bool {
+	return c.Strategy.Type == "trend_following"
 }
 
 func Load(path string) (*Config, error) {
@@ -127,10 +173,38 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("model.threshold_up", 0.6)
 	v.SetDefault("model.threshold_down", 0.6)
+	v.SetDefault("model.num_classes", 3)
+	v.SetDefault("model.timeframe", "5m")
 
 	v.SetDefault("execution.use_limit_orders", false)
 	v.SetDefault("execution.slippage_bp", 5.0)
 	v.SetDefault("execution.fee_percent", 0.1)
 
 	v.SetDefault("monitoring.prometheus_port", 9090)
+
+	// Strategy defaults (Plan D: Trend Following)
+	v.SetDefault("strategy.type", "ml")
+	v.SetDefault("strategy.donchian_period", 20)
+	v.SetDefault("strategy.ema_fast", 9)
+	v.SetDefault("strategy.ema_slow", 21)
+	v.SetDefault("strategy.ema_confirm_bars", 5)
+	v.SetDefault("strategy.ema_trend", 50)
+	v.SetDefault("strategy.volume_period", 20)
+	v.SetDefault("strategy.atr_period", 14)
+	v.SetDefault("strategy.atr_stop_multiplier", 3.0)
+	v.SetDefault("strategy.adx_period", 14)
+	v.SetDefault("strategy.adx_threshold", 20.0)
+	v.SetDefault("strategy.volatility_low", 0.5)
+	v.SetDefault("strategy.volatility_high", 2.5)
+	v.SetDefault("strategy.chandelier_lookback", 10)
+	v.SetDefault("strategy.funding_filter.enabled", true)
+	v.SetDefault("strategy.funding_filter.extreme_threshold", 0.0005)
+	v.SetDefault("strategy.funding_filter.elevated_threshold", 0.0003)
+	v.SetDefault("strategy.funding_filter.size_reduction", 0.5)
+	v.SetDefault("strategy.funding_filter.poll_interval_seconds", 300)
+	v.SetDefault("strategy.partial_exits.enabled", true)
+	v.SetDefault("strategy.partial_exits.first_target_r", 3.0)
+	v.SetDefault("strategy.partial_exits.first_exit_pct", 0.25)
+	v.SetDefault("strategy.partial_exits.second_target_r", 6.0)
+	v.SetDefault("strategy.partial_exits.second_exit_pct", 0.25)
 }
