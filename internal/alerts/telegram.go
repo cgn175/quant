@@ -1,7 +1,9 @@
 package alerts
 
 import (
+	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,24 @@ type Alert struct {
 	Symbol    string // optional
 }
 
+// StatusProvider is an interface for components that can provide status information.
+type StatusProvider interface {
+	GetStatusInfo() StatusInfo
+}
+
+// StatusInfo contains bot status information for the /status command.
+type StatusInfo struct {
+	Mode              string
+	Uptime            time.Duration
+	OpenPositions     int
+	DailyPnL          float64
+	Equity            float64
+	CandlesPerSymbol  map[string]int64
+	LastCandleTime    map[string]time.Time
+	WebSocketStatus   string
+	MemoryUsageMB     float64
+}
+
 // Manager handles telegram alerts
 type Manager struct {
 	mu           sync.Mutex
@@ -38,6 +58,9 @@ type Manager struct {
 	rateLimit    time.Duration
 	lastAlertMap map[string]time.Time // prevent spam
 	log          zerolog.Logger
+	startTime    time.Time
+	statusProvider StatusProvider
+	cancelFunc   context.CancelFunc
 }
 
 // Config for alert manager
@@ -56,6 +79,7 @@ func NewManager(cfg Config, log zerolog.Logger) (*Manager, error) {
 		rateLimit:    time.Duration(cfg.RateLimitMs) * time.Millisecond,
 		lastAlertMap: make(map[string]time.Time),
 		log:          log,
+		startTime:    time.Now(),
 	}
 
 	if !cfg.Enabled {
@@ -76,6 +100,193 @@ func NewManager(cfg Config, log zerolog.Logger) (*Manager, error) {
 	log.Info().Str("username", bot.Self.UserName).Msg("telegram bot connected")
 
 	return mgr, nil
+}
+
+// SetStatusProvider sets the status provider for the /status command.
+func (m *Manager) SetStatusProvider(provider StatusProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statusProvider = provider
+}
+
+// StartCommandListener starts listening for Telegram commands in a background goroutine.
+// Call Stop() to stop the listener.
+func (m *Manager) StartCommandListener(ctx context.Context) {
+	if !m.enabled || m.bot == nil {
+		return
+	}
+
+	// Create a cancellable context for the command listener
+	listenerCtx, cancel := context.WithCancel(ctx)
+	m.mu.Lock()
+	m.cancelFunc = cancel
+	m.mu.Unlock()
+
+	go m.commandLoop(listenerCtx)
+	m.log.Info().Msg("telegram command listener started")
+}
+
+// Stop stops the command listener.
+func (m *Manager) Stop() {
+	m.mu.Lock()
+	if m.cancelFunc != nil {
+		m.cancelFunc()
+	}
+	m.mu.Unlock()
+}
+
+// commandLoop listens for incoming Telegram commands.
+func (m *Manager) commandLoop(ctx context.Context) {
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 30
+
+	updates := m.bot.GetUpdatesChan(u)
+
+	for {
+		select {
+		case <-ctx.Done():
+			m.log.Info().Msg("telegram command listener stopped")
+			return
+		case update := <-updates:
+			if update.Message == nil || !update.Message.IsCommand() {
+				continue
+			}
+
+			// Only respond to messages from the configured chat
+			if update.Message.Chat.ID != m.chatID {
+				continue
+			}
+
+			switch update.Message.Command() {
+			case "status":
+				m.handleStatusCommand(update.Message)
+			case "help":
+				m.handleHelpCommand(update.Message)
+			}
+		}
+	}
+}
+
+// handleStatusCommand handles the /status command.
+func (m *Manager) handleStatusCommand(msg *tgbotapi.Message) {
+	m.mu.Lock()
+	provider := m.statusProvider
+	startTime := m.startTime
+	m.mu.Unlock()
+
+	var statusMsg string
+
+	if provider != nil {
+		info := provider.GetStatusInfo()
+		
+		// Format uptime
+		uptime := time.Since(startTime)
+		uptimeStr := formatDuration(uptime)
+
+		// Format candles per symbol
+		var candleLines []string
+		for sym, count := range info.CandlesPerSymbol {
+			lastTime := ""
+			if t, ok := info.LastCandleTime[sym]; ok && !t.IsZero() {
+				lastTime = fmt.Sprintf(" (last: %s)", t.Format("15:04:05"))
+			}
+			candleLines = append(candleLines, fmt.Sprintf("  %s: %d%s", sym, count, lastTime))
+		}
+		candlesStr := strings.Join(candleLines, "\n")
+		if candlesStr == "" {
+			candlesStr = "  No data yet"
+		}
+
+		// Get memory stats
+		var memStats runtime.MemStats
+		runtime.ReadMemStats(&memStats)
+		memMB := float64(memStats.Alloc) / 1024 / 1024
+
+		statusMsg = fmt.Sprintf(`📊 *Bot Status*
+
+*Mode:* %s
+*Uptime:* %s
+*Open Positions:* %d
+*Daily PnL:* $%.2f
+*Equity:* $%.2f
+
+*Candles Received:*
+%s
+
+*WebSocket:* %s
+*Memory:* %.1f MB`,
+			escapeMarkdownV2(info.Mode),
+			escapeMarkdownV2(uptimeStr),
+			info.OpenPositions,
+			info.DailyPnL,
+			info.Equity,
+			escapeMarkdownV2(candlesStr),
+			escapeMarkdownV2(info.WebSocketStatus),
+			memMB,
+		)
+	} else {
+		// Fallback if no provider set
+		uptime := time.Since(startTime)
+		var memStats runtime.MemStats
+		runtime.ReadMemStats(&memStats)
+		memMB := float64(memStats.Alloc) / 1024 / 1024
+
+		statusMsg = fmt.Sprintf(`📊 *Bot Status*
+
+*Uptime:* %s
+*Memory:* %.1f MB
+
+_Status provider not configured_`,
+			escapeMarkdownV2(formatDuration(uptime)),
+			memMB,
+		)
+	}
+
+	reply := tgbotapi.NewMessage(msg.Chat.ID, statusMsg)
+	reply.ParseMode = "MarkdownV2"
+	reply.ReplyToMessageID = msg.MessageID
+
+	if _, err := m.bot.Send(reply); err != nil {
+		// Retry without markdown
+		reply.ParseMode = ""
+		reply.Text = strings.ReplaceAll(statusMsg, "*", "")
+		reply.Text = strings.ReplaceAll(reply.Text, "_", "")
+		m.bot.Send(reply)
+	}
+}
+
+// handleHelpCommand handles the /help command.
+func (m *Manager) handleHelpCommand(msg *tgbotapi.Message) {
+	helpMsg := `🤖 *Quant Bot Commands*
+
+/status \\- Show bot status and health info
+/help \\- Show this help message`
+
+	reply := tgbotapi.NewMessage(msg.Chat.ID, helpMsg)
+	reply.ParseMode = "MarkdownV2"
+	reply.ReplyToMessageID = msg.MessageID
+
+	if _, err := m.bot.Send(reply); err != nil {
+		reply.ParseMode = ""
+		reply.Text = strings.ReplaceAll(helpMsg, "*", "")
+		reply.Text = strings.ReplaceAll(reply.Text, "\\", "")
+		m.bot.Send(reply)
+	}
+}
+
+// formatDuration formats a duration in a human-readable way.
+func formatDuration(d time.Duration) string {
+	days := int(d.Hours() / 24)
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 // mdv2Replacer escapes all special characters for Telegram MarkdownV2.

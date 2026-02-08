@@ -307,6 +307,18 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		runPeriodicTasks(ctx, riskMgr, execEngine, prom, alertMgr)
 	}()
 
+	// Set up status provider and start Telegram command listener
+	statusProvider := &botStatusProvider{
+		cfg:        cfg,
+		riskMgr:    riskMgr,
+		trendStrat: trendStrat,
+		prom:       prom,
+		store:      store,
+	}
+	alertMgr.SetStatusProvider(statusProvider)
+	alertMgr.StartCommandListener(ctx)
+	defer alertMgr.Stop()
+
 	// Wait for shutdown
 	<-ctx.Done()
 	log.Info().Msg("shutting down — closing channels and waiting for goroutines")
@@ -333,6 +345,47 @@ type trendDepsBundle struct {
 	prom         *metrics.Metrics
 	alertMgr     *alerts.Manager
 	cfg          *config.Config
+}
+
+// botStatusProvider implements alerts.StatusProvider for the /status command.
+type botStatusProvider struct {
+	cfg          *config.Config
+	riskMgr      *risk.Manager
+	trendStrat   *strategy.TrendStrategy
+	prom         *metrics.Metrics
+	store        *data.CandleStore
+}
+
+// GetStatusInfo returns the current bot status.
+func (p *botStatusProvider) GetStatusInfo() alerts.StatusInfo {
+	info := alerts.StatusInfo{
+		Mode:             p.cfg.Mode,
+		CandlesPerSymbol: make(map[string]int64),
+		LastCandleTime:   make(map[string]time.Time),
+		WebSocketStatus:  "connected",
+	}
+
+	// Get equity and positions from risk manager
+	if p.riskMgr != nil {
+		info.Equity = p.riskMgr.GetEquity()
+		positions := p.riskMgr.GetAllPositions()
+		info.OpenPositions = len(positions)
+	}
+
+	// Get daily PnL from trend strategy
+	if p.trendStrat != nil {
+		info.DailyPnL = p.trendStrat.GetDailyPnL()
+	}
+
+	// Get candle counts and last candle times from store
+	if p.store != nil {
+		for _, sym := range p.cfg.Symbols {
+			info.CandlesPerSymbol[sym] = int64(p.store.Len(sym))
+			info.LastCandleTime[sym] = p.store.LastCandleTime(sym)
+		}
+	}
+
+	return info
 }
 
 // trendSymbolLoop is the per-symbol goroutine for the trend-following strategy.

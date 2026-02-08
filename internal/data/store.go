@@ -107,3 +107,15 @@ func (s *CandleStore) Symbols() []string {
 	}
 	return symbols
 }
+
+// LastCandleTime returns the close time of the most recent candle for a symbol.
+func (s *CandleStore) LastCandleTime(symbol string) time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	candles := s.candles[symbol]
+	if len(candles) == 0 {
+		return time.Time{}
+	}
+	return candles[len(candles)-1].CloseTime
+}
