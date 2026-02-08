@@ -25,6 +25,11 @@ const (
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 60 * time.Second
 	backoffFactor  = 2.0
+
+	// WebSocket keep-alive settings
+	wsReadDeadline = 90 * time.Second // Time to wait for any message before considering connection dead
+	wsPingInterval = 30 * time.Second // How often to send pings
+	wsPongTimeout  = 10 * time.Second // Time to wait for pong response
 )
 
 type streamType int
@@ -95,6 +100,17 @@ func (c *BinanceClient) connectAndStartReadLoop() (uint64, error) {
 		return 0, fmt.Errorf("failed to connect to binance ws: %w", err)
 	}
 
+	// Set up ping/pong handlers for keep-alive
+	conn.SetPongHandler(func(appData string) error {
+		// Reset read deadline when we receive a pong
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+		log.Debug().Msg("ws pong received")
+		return nil
+	})
+
+	// Set initial read deadline
+	conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+
 	c.mu.Lock()
 	// Close any existing connection before assigning new one
 	if c.conn != nil {
@@ -110,6 +126,9 @@ func (c *BinanceClient) connectAndStartReadLoop() (uint64, error) {
 
 	// Start read loop with the current generation
 	go c.readLoop(conn, gen)
+
+	// Start ping loop for this connection
+	go c.pingLoop(conn, gen)
 
 	return gen, nil
 }
@@ -301,6 +320,9 @@ func (c *BinanceClient) readLoop(conn *websocket.Conn, gen uint64) {
 			return
 		}
 
+		// Reset read deadline on any successful message
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+
 		var combined combinedStreamMessage
 		if err := json.Unmarshal(message, &combined); err != nil {
 			log.Warn().Err(err).Msg("failed to parse combined stream message")
@@ -317,6 +339,40 @@ func (c *BinanceClient) readLoop(conn *websocket.Conn, gen uint64) {
 		}
 
 		c.handleStreamMessage(sub, combined.Data)
+	}
+}
+
+// pingLoop sends periodic ping messages to keep the WebSocket connection alive.
+// It exits when the connection generation changes or the client is closed.
+func (c *BinanceClient) pingLoop(conn *websocket.Conn, gen uint64) {
+	ticker := time.NewTicker(wsPingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+			// Check if this is still the current connection
+			c.mu.RLock()
+			stillCurrent := (c.conn == conn && c.connGen == gen)
+			c.mu.RUnlock()
+
+			if !stillCurrent {
+				log.Debug().Uint64("gen", gen).Msg("stale pingLoop exiting")
+				return
+			}
+
+			// Send ping with deadline
+			deadline := time.Now().Add(wsPongTimeout)
+			if err := conn.WriteControl(websocket.PingMessage, []byte{}, deadline); err != nil {
+				log.Warn().Err(err).Uint64("gen", gen).Msg("ws ping failed")
+				// Don't trigger reconnect from here — let the read loop handle it
+				// when it times out or gets an error
+				return
+			}
+			log.Debug().Uint64("gen", gen).Msg("ws ping sent")
+		}
 	}
 }
 
