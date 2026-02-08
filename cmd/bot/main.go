@@ -106,7 +106,23 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 
 	// Candle store — trend following needs EMA-50 + Donchian-20 + ATR warm-up
 	storeSize := 120 // generous for all indicators
-	store := data.NewCandleStore(storeSize)
+	sqliteStore, err := data.NewSQLiteStore(data.SQLiteConfig{
+		DBPath:     cfg.Storage.CandleDBPath,
+		MaxCandles: storeSize,
+		MaxDBRows:  cfg.Storage.MaxDBRows,
+	})
+	if err != nil {
+		return fmt.Errorf("create sqlite store: %w", err)
+	}
+	defer sqliteStore.Close()
+
+	// Load historical candles from SQLite
+	if err := sqliteStore.LoadHistory(cfg.Symbols); err != nil {
+		log.Warn().Err(err).Msg("failed to load historical candles, starting fresh")
+	}
+
+	// Use SQLiteStore as the store (it wraps CandleStore)
+	store := sqliteStore
 
 	// Funding rate cache
 	var fundingCache *data.FundingCache
@@ -336,7 +352,7 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 
 // trendDepsBundle bundles dependencies for the trend strategy processing loop.
 type trendDepsBundle struct {
-	store        *data.CandleStore
+	store        data.CandleStoreInterface
 	trendStrat   *strategy.TrendStrategy
 	fundingCache *data.FundingCache
 	riskMgr      *risk.Manager
@@ -353,7 +369,7 @@ type botStatusProvider struct {
 	riskMgr      *risk.Manager
 	trendStrat   *strategy.TrendStrategy
 	prom         *metrics.Metrics
-	store        *data.CandleStore
+	store        data.CandleStoreInterface
 }
 
 // GetStatusInfo returns the current bot status.
@@ -450,7 +466,7 @@ func handleTrendTick(ctx context.Context, tick tickEvent, d trendDepsBundle) {
 // calculateMarketVolScalar computes the market volatility scalar for position sizing.
 // Uses average ATR% of BTC and ETH as a proxy for overall market volatility.
 // (Patch 4: Volatility Scalar)
-func calculateMarketVolScalar(store *data.CandleStore) float64 {
+func calculateMarketVolScalar(store data.CandleStoreInterface) float64 {
 	btcCandles := store.GetAll("BTCUSDT")
 	ethCandles := store.GetAll("ETHUSDT")
 

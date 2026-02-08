@@ -7,6 +7,18 @@ import (
 	"github.com/cgn175/quant-bot/internal/exchange"
 )
 
+// CandleStoreInterface defines the interface for candle storage.
+// Both CandleStore and SQLiteStore implement this interface.
+type CandleStoreInterface interface {
+	Add(candle exchange.Candle)
+	Get(symbol string, n int) []exchange.Candle
+	GetAll(symbol string) []exchange.Candle
+	GetSince(symbol string, since time.Time) []exchange.Candle
+	Len(symbol string) int
+	Symbols() []string
+	LastCandleTime(symbol string) time.Time
+}
+
 type CandleStore struct {
 	mu      sync.RWMutex
 	candles map[string][]exchange.Candle

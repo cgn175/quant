@@ -51,6 +51,7 @@ models/features.json
 
 # Training data
 ./data/
+/data/
 *.parquet
 *.csv
 *.h5

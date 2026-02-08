@@ -19,6 +19,7 @@ type Config struct {
 	Alerts     AlertsConfig     `mapstructure:"alerts"`
 	Mode       string           `mapstructure:"mode"`
 	Strategy   StrategyConfig   `mapstructure:"strategy"`
+	Storage    StorageConfig    `mapstructure:"storage"`
 }
 
 type ExchangeConfig struct {
@@ -122,6 +123,12 @@ type PartialExitsConfig struct {
 	FirstExitPct   float64 `mapstructure:"first_exit_pct"`
 	SecondTargetR  float64 `mapstructure:"second_target_r"`
 	SecondExitPct  float64 `mapstructure:"second_exit_pct"`
+}
+
+// StorageConfig holds data persistence configuration.
+type StorageConfig struct {
+	CandleDBPath string `mapstructure:"candle_db_path"` // Path to SQLite candle database
+	MaxDBRows    int    `mapstructure:"max_db_rows"`    // Max candles per symbol in DB
 }
 
 // IsTrendFollowing returns true if the strategy type is trend_following.
@@ -283,4 +290,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.partial_exits.first_exit_pct", 0.25)
 	v.SetDefault("strategy.partial_exits.second_target_r", 6.0)
 	v.SetDefault("strategy.partial_exits.second_exit_pct", 0.25)
+
+	// Storage defaults
+	v.SetDefault("storage.candle_db_path", "candles.db")
+	v.SetDefault("storage.max_db_rows", 2000) // ~333 days of 4h candles per symbol
 }
