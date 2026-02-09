@@ -1,6 +1,6 @@
 # Plan D: Implementation Progress
 
-## Status: 🟡 Phase 3 IN PROGRESS — Paper Trading Active
+## Status: 🟡 Phase 3 IN PROGRESS — Paper Trading Active + ML Integration Complete
 
 ### Phase 0: Data Preparation
 | Task | Status | Notes |
@@ -30,6 +30,15 @@
 | 2.6 cmd/bot/main.go — trendStrategyLoop | ✅ Done | runTrendFollowing entry point, trendSymbolLoop, handleTrendTick/Entry/PartialExit |
 | 2.7 SQLite persistence for warm-up | ✅ Done | Candles persist across restarts, immediate indicator calculation |
 
+### Phase 2.5: Plan D Improvements (5 Patches)
+| Task | Status | Notes |
+|------|--------|-------|
+| Patch 1: Whipsaw Defense | ✅ Done | Candle color filter + BB bandwidth dead market filter |
+| Patch 2: Dynamic Chandelier Exit | ✅ Done | ATR mult tightens at 2R/4R/6R profit levels |
+| Patch 3: Correlation Guard | ✅ Done | Sector-based position limits (max 1 per sector) |
+| Patch 4: Volatility Scalar | ✅ Done | Market regime sizing (0.5x violent, 1.2x quiet) |
+| Patch 5: Breakout Retest | ✅ Done | Split entry: 50% market + 50% limit order |
+
 ### Phase 3: Paper Trading
 | Task | Status | Notes |
 |------|--------|-------|
@@ -37,11 +46,29 @@
 | 3.2 SQLite warm-up persistence | ✅ Done | Historical candles loaded from `data/candles.db` on startup |
 | 3.3 Validation criteria check | 🟡 Ready | `scripts/validate_paper_trading.py` created — run after 2+ weeks |
 
-### Phase 4: Live Deployment
+### Phase 4: ML Integration (XGBoost Filter) — COMPLETE ✅
 | Task | Status | Notes |
 |------|--------|-------|
-| 4.1 Small capital deployment | ⬜ Not Started | Change `mode: live` in config.yaml, restart bot |
-| 4.2 Scale up | ⬜ Not Started | |
+| 4.1 Data ingestion to SQLite | ✅ Done | `scripts/ingest_4h_to_sqlite.py` — 51K candles, 25K funding rows → `data/training.db` |
+| 4.2 Feature engineering (Python) | ✅ Done | `ml/features.py` — 19 features (price action, technical, funding, temporal, regime) |
+| 4.3 XGBoost model training | ✅ Done | `ml/trainer.py` — per-symbol models, train/test split at 2025-07-01 |
+| 4.4 Python inference service | ✅ Done | `ml/server.py` — HTTP port 9001, `/predict` endpoint, stdlib http.server |
+| 4.5 Go ML filter integration | ✅ Done | `internal/mlfilter/client.go`, `trend_ml_features.go`, ML-or-ADX gate in `trend.go` |
+| 4.6 A/B testing framework | ✅ Done | Circuit breaker, ML Prometheus metrics, `docs/AB_TESTING_GUIDE.md` |
+
+### Phase 5: Parameter Optimization (Optuna) — COMPLETE ✅
+| Task | Status | Notes |
+|------|--------|-------|
+| 5.1 Optuna optimization harness | ✅ Done | `opt/optimize.py` — 5-fold walk-forward CV, maximizes Sortino ratio |
+| 5.2 Per-symbol results | ✅ Done | Results in `opt/results/best_params_{SYMBOL}.yaml` |
+
+### Phase 6: Live Deployment
+| Task | Status | Notes |
+|------|--------|-------|
+| 6.1 A/B paper testing (2 weeks) | ⬜ Not Started | Run parallel control (ADX) vs ML instances per `docs/AB_TESTING_GUIDE.md` |
+| 6.2 Production gate | ⬜ Not Started | ML must beat ADX on Sortino, no major drawdowns |
+| 6.3 Small capital deployment | ⬜ Not Started | Change `mode: live` in config.yaml, restart bot |
+| 6.4 Scale up | ⬜ Not Started | |
 
 ---
 
@@ -359,7 +386,100 @@ The script validates:
 
 ---
 
-### Phase 4: Transitioning to Live Trading
+## Phase 4: ML Integration — Implementation Report
+
+**Completed**: All 6 tasks ✅ | **Epic**: `quant-tme` (closed)
+
+### Architecture Overview
+
+```
+Go Bot (trend.go OnBar)
+  └── ML-or-ADX gate (Layer 2a)
+       ├── ML enabled? → HTTP POST to ml/server.py:9001/predict
+       │    ├── prob >= threshold → ALLOW entry
+       │    ├── prob < threshold  → BLOCK entry
+       │    └── error → fallback_to_adx OR block (configurable)
+       └── ML disabled → legacy ADX > threshold
+```
+
+### Files Created
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `scripts/ingest_4h_to_sqlite.py` | ~120 | Ingest parquet data → `data/training.db` |
+| `ml/features.py` | 136 | 19-feature engineering pipeline (v1) |
+| `ml/trainer.py` | 200 | XGBoost training with train/test split |
+| `ml/server.py` | ~150 | Python HTTP inference microservice (port 9001) |
+| `internal/mlfilter/client.go` | ~120 | Go HTTP client for ML predictions |
+| `internal/mlfilter/circuit_breaker.go` | ~80 | Sliding-window circuit breaker (50% error rate) |
+| `internal/strategy/trend_ml_features.go` | 136 | Go-side feature calculation (mirrors `ml/features.py`) |
+| `opt/optimize.py` | 377 | Optuna walk-forward optimization |
+| `docs/AB_TESTING_GUIDE.md` | 120 | A/B testing runbook |
+
+### Files Modified
+
+| File | Changes | Purpose |
+|------|---------|---------|
+| `internal/strategy/trend.go` | Layer 2a rewritten | ML-or-ADX gate with fallback |
+| `internal/config/config.go` | +MLFilterConfig struct | `strategy.ml_filter.*` settings |
+| `internal/metrics/metrics.go` | +5 ML metrics | Prob gauge, error/block/fallback counters, latency histogram |
+| `config.yaml` | +`strategy.ml_filter` section | ML filter disabled by default |
+
+### XGBoost Model Performance (OOS: 2025-07-01 → 2026-02-08)
+
+| Symbol | AUC | Precision | Recall | F1 |
+|--------|-----|-----------|--------|-----|
+| BTCUSDT | 0.610 | 0.227 | 0.369 | 0.281 |
+| ETHUSDT | 0.569 | 0.333 | 0.294 | 0.313 |
+| SOLUSDT | 0.543 | 0.302 | 0.280 | 0.291 |
+| BNBUSDT | 0.562 | 0.296 | 0.283 | 0.289 |
+
+**Assessment**: AUC is modest (0.54–0.61). Models are better than random but not strongly predictive. The ML filter may still add value by blocking low-quality entries that the simple ADX threshold would allow.
+
+### Feature Set (v1) — 19 Features
+
+| Category | Features |
+|----------|----------|
+| Price Action | `returns_1bar`, `returns_4bar`, `returns_20bar`, `volatility_20` |
+| Technical | `rsi_14`, `bb_width_20`, `adx_14`, `ema_9_distance`, `ema_50_distance` |
+| Volume | `volume_ratio_20` |
+| Funding | `funding_8h_avg`, `funding_24h_avg` |
+| Temporal | `hour_sin`, `hour_cos`, `dow_sin`, `dow_cos` |
+| Regime | `atr_14`, `atr_ratio`, `donchian_breakout` |
+
+### Optuna Optimization Results (50 trials, 5-fold WF-CV)
+
+| Symbol | CV Sortino | OOS Sortino | OOS Return | OOS Trades | Key Params |
+|--------|-----------|-------------|-----------|------------|------------|
+| BTCUSDT | 449.6 | 18.0 | +1.1% | 3 | DC=20, EMA=12/21, ATR=4.0, ADX=30 |
+| ETHUSDT | 310.8 | 0.0 | 0% | 0 | DC=30, EMA=6/20, ATR=2.0, ADX=28 ⚠️ |
+| SOLUSDT | 112.4 | 36.5 | +2.9% | 7 | DC=17, EMA=13/25, ATR=4.5, ADX=21 ⭐ |
+| BNBUSDT | 43.3 | 2.2 | +1.3% | 10 | DC=22, EMA=6/29, ATR=5.0, ADX=17 |
+
+**Known Issue**: ETH optimized `adx_threshold=28` is too restrictive → 0 OOS trades. The optimizer overfits to CV folds. Default params (ADX=20) are safer for ETH.
+
+### Current ML Filter Config
+
+```yaml
+strategy:
+  ml_filter:
+    enabled: false          # ← disabled by default
+    url: "http://localhost:9001"
+    threshold: 0.65
+    timeout_ms: 200
+    fail_open: false
+    fallback_to_adx: true   # ← fall back to ADX on ML errors
+```
+
+### Next Steps for ML
+
+1. **A/B Paper Test**: Run parallel instances (ADX vs ML) per `docs/AB_TESTING_GUIDE.md`
+2. **Model Improvement**: Better features, target tuning, or ensemble approaches
+3. **Production Gate**: ML must beat ADX on Sortino with no major drawdowns
+
+---
+
+### Phase 6: Transitioning to Live Trading
 
 **When Paper Trading is Complete** (after 2-4 weeks of validation):
 
@@ -368,7 +488,16 @@ The script validates:
    - Verify trailing stops, partial exits, funding filters worked correctly
    - Check no unexpected errors or missed signals in logs
 
-2. **Switch to live mode** — just change config and restart:
+2. **Optional: Enable ML filter** for A/B testing:
+   ```bash
+   # Start inference server
+   python3 ml/server.py &
+   
+   # Update config
+   # strategy.ml_filter.enabled: true
+   ```
+
+3. **Switch to live mode** — just change config and restart:
    ```yaml
    # config.yaml
    mode: live    # was: paper
@@ -380,18 +509,18 @@ The script validates:
    ./bin/bot --config config.yaml
    ```
 
-3. **What changes in live mode**:
+4. **What changes in live mode**:
    - `PaperExecutor` → `LiveExecutor` (actual orders sent to Binance)
    - Real API calls to place/cancel/modify orders
    - Real slippage and fees (not simulated)
    - Everything else stays the same (strategy logic, risk management, indicators)
 
-4. **Start with small capital**:
+5. **Start with small capital**:
    - Initial deployment: $500–$1,000
    - `risk.initial_equity: 1000.0` in config.yaml
    - Monitor closely for first 1-2 weeks
 
-5. **Scale up gradually**:
+6. **Scale up gradually**:
    - If live results match paper trading expectations
    - Increase `initial_equity` incrementally
    - Never risk more than you can afford to lose
