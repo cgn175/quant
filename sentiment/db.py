@@ -20,7 +20,6 @@ class SentimentDB:
 
     def __init__(self, db_path: str = "sentiment.db"):
         self.db_path = db_path
-        self.loop = asyncio.get_event_loop()
         self._init_db()
 
     def _init_db(self):
@@ -152,7 +151,8 @@ class SentimentDB:
             finally:
                 conn.close()
 
-        return await self.loop.run_in_executor(None, _save)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _save)
 
     async def save_daily_sentiment(
         self,
@@ -199,7 +199,8 @@ class SentimentDB:
             finally:
                 conn.close()
 
-        return await self.loop.run_in_executor(None, _save)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _save)
 
     async def save_source_sentiment(
         self,
@@ -234,7 +235,8 @@ class SentimentDB:
             finally:
                 conn.close()
 
-        return await self.loop.run_in_executor(None, _save)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _save)
 
     async def save_mention_history(
         self,
@@ -267,7 +269,8 @@ class SentimentDB:
             finally:
                 conn.close()
 
-        return await self.loop.run_in_executor(None, _save)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _save)
 
     async def get_hourly_sentiment(
         self,
@@ -309,7 +312,8 @@ class SentimentDB:
                 for row in rows
             ]
 
-        return await self.loop.run_in_executor(None, _fetch)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _fetch)
 
     async def get_daily_sentiment(
         self,
@@ -351,7 +355,8 @@ class SentimentDB:
                 for row in rows
             ]
 
-        return await self.loop.run_in_executor(None, _fetch)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _fetch)
 
     async def get_mention_history(
         self,
@@ -385,7 +390,8 @@ class SentimentDB:
                 for row in rows
             ]
 
-        return await self.loop.run_in_executor(None, _fetch)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _fetch)
 
     async def cleanup_old_data(self) -> bool:
         """Delete old sentiment data beyond retention periods."""
@@ -426,7 +432,8 @@ class SentimentDB:
                 logger.info(f"Cleaned up {deleted} old sentiment records")
             return True
 
-        return await self.loop.run_in_executor(None, _cleanup)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _cleanup)
 
     async def has_any_data(self) -> bool:
         """Return True if any sentiment data exists in the database."""
@@ -443,4 +450,5 @@ class SentimentDB:
             finally:
                 conn.close()
 
-        return await self.loop.run_in_executor(None, _check)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _check)

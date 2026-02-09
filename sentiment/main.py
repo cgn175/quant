@@ -254,13 +254,13 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
         # Get historical data for trend analysis
         hourly_data = await sentiment_db.get_hourly_sentiment(symbol, hours=lookback_hours)
         historical_scores = [
-            (datetime.fromisoformat(row["timestamp"]), row.get("score_positive", 0) - row.get("score_negative", 0))
+            (row["timestamp"], row.get("score_positive", 0) - row.get("score_negative", 0))
             for row in hourly_data
         ]
         
         # Get mention history
         historical_mentions = [
-            (datetime.fromisoformat(row["timestamp"]), row.get("mentions_count", 0))
+            (row["timestamp"], row.get("mentions_count", 0))
             for row in hourly_data
         ]
         

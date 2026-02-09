@@ -4,9 +4,9 @@ set -e
 # Configuration
 ML_PORT=9001
 SENTIMENT_PORT=8000
-ML_LOG="ml_server.log"
-SENTIMENT_LOG="sentiment_server.log"
-BOT_LOG="bot.log"
+ML_LOG="logs/ml_server.log"
+SENTIMENT_LOG="logs/sentiment_server.log"
+BOT_LOG="logs/bot.log"
 CONFIG_FILE="config.yaml"
 
 # Cleanup function
