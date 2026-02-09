@@ -22,6 +22,7 @@ from fetchers import (
 from pydantic import BaseModel
 
 from models import FinBERTAnalyzer, get_analyzer
+from insights import InsightsGenerator, InsightReport
 
 app = FastAPI(title="Sentiment Microservice", version="1.0.0")
 
@@ -45,6 +46,9 @@ fetchers = {
 
 # Database
 sentiment_db = SentimentDB(db_path="sentiment.db")
+
+# Insights generator
+insights_generator = InsightsGenerator()
 
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 
@@ -80,6 +84,42 @@ class HistoricalSentimentResponse(BaseModel):
     symbol: str
     data: list[dict]  # list of hourly or daily sentiment data
     period: str  # "hourly" or "daily"
+
+
+class InsightReportResponse(BaseModel):
+    """Extended sentiment report with actionable insights."""
+    
+    symbol: str
+    timestamp: datetime
+    current_sentiment: float
+    
+    # Theme analysis
+    top_keywords: list[tuple[str, int]]
+    recurring_themes: list[str]
+    sentiment_by_theme: dict[str, float]
+    
+    # Source diversity
+    total_sources: int
+    active_sources: list[str]
+    source_types: dict[str, int]
+    source_agreement: float
+    dominant_source: str | None
+    coverage_score: float
+    
+    # Trend analysis
+    trend_direction: str
+    trend_strength: float
+    anomaly_detected: bool
+    anomaly_description: str | None
+    confidence_interval: tuple[float, float]
+    volatility: float
+    
+    # Recommendation
+    signal: str
+    confidence: float
+    reasoning: list[str]
+    risk_level: str
+    suggested_action: str
 
 
 class HealthResponse(BaseModel):
@@ -138,6 +178,120 @@ async def get_sentiment_history(symbol: str, days: int = 7, period: str = "hourl
             data=data,
             period=period,
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sentiment/{symbol}/insights", response_model=InsightReportResponse)
+async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
+    """Generate actionable insights from aggregated sentiment data.
+    
+    This endpoint provides:
+    - Theme extraction from news content
+    - Source diversity analysis
+    - Trend detection and anomaly alerts
+    - Actionable trading recommendations
+    
+    Args:
+        symbol: Trading symbol (e.g., BTCUSDT)
+        lookback_hours: Hours of data to analyze (default 24, max 168)
+    """
+    symbol = symbol.upper()
+    lookback_hours = min(lookback_hours, 168)  # Cap at 7 days
+    
+    try:
+        # Fetch fresh sentiment data
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=lookback_hours)
+        
+        # Gather posts from all sources
+        fetch_tasks = [fetcher.fetch(symbol, limit=100) for fetcher in fetchers.values()]
+        all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        
+        posts = []
+        for result in all_results:
+            if isinstance(result, list) and result:
+                posts.extend(result)
+        
+        # Filter to lookback window
+        posts = [p for p in posts if p.timestamp >= cutoff]
+        
+        if not posts:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No sentiment data available for {symbol} in the last {lookback_hours} hours"
+            )
+        
+        # Analyze sentiment
+        analyzer = get_analyzer()
+        texts = [p.text for p in posts]
+        sentiments = analyzer.analyze(texts)
+        
+        # Calculate current aggregated score
+        weighted_scores = []
+        weights = []
+        for post, sent in zip(posts, sentiments):
+            score = sent["positive"] - sent["negative"]
+            weight = max(1, post.score) if post.score > 0 else 1
+            weighted_scores.append(score * weight)
+            weights.append(weight)
+        
+        current_score = sum(weighted_scores) / sum(weights) if weights else 0.0
+        
+        # Get historical data for trend analysis
+        hourly_data = await sentiment_db.get_hourly_sentiment(symbol, hours=lookback_hours)
+        historical_scores = [
+            (datetime.fromisoformat(row["timestamp"]), row.get("score_positive", 0) - row.get("score_negative", 0))
+            for row in hourly_data
+        ]
+        
+        # Get mention history
+        historical_mentions = [
+            (datetime.fromisoformat(row["timestamp"]), row.get("mentions_count", 0))
+            for row in hourly_data
+        ]
+        
+        # Prepare data for insights generator
+        posts_with_scores = [(post, sent["positive"] - sent["negative"]) for post, sent in zip(posts, sentiments)]
+        
+        # Generate insights report
+        report = insights_generator.generate_report(
+            symbol=symbol,
+            posts=posts_with_scores,
+            sentiments=sentiments,
+            current_score=current_score,
+            historical_scores=historical_scores,
+            historical_mentions=historical_mentions,
+        )
+        
+        # Convert to response model
+        return InsightReportResponse(
+            symbol=report.symbol,
+            timestamp=report.timestamp,
+            current_sentiment=report.current_sentiment,
+            top_keywords=report.themes.top_keywords,
+            recurring_themes=report.themes.recurring_themes,
+            sentiment_by_theme=report.themes.sentiment_by_theme,
+            total_sources=report.source_diversity.total_sources,
+            active_sources=report.source_diversity.active_sources,
+            source_types=report.source_diversity.source_types,
+            source_agreement=report.source_diversity.source_agreement,
+            dominant_source=report.source_diversity.dominant_source,
+            coverage_score=report.source_diversity.coverage_score,
+            trend_direction=report.trend.trend_direction,
+            trend_strength=report.trend.trend_strength,
+            anomaly_detected=report.trend.anomaly_detected,
+            anomaly_description=report.trend.anomaly_description,
+            confidence_interval=report.trend.confidence_interval,
+            volatility=report.trend.volatility,
+            signal=report.recommendation.signal,
+            confidence=report.recommendation.confidence,
+            reasoning=report.recommendation.reasoning,
+            risk_level=report.recommendation.risk_level,
+            suggested_action=report.recommendation.suggested_action,
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
