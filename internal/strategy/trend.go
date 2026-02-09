@@ -8,6 +8,7 @@
 package strategy
 
 import (
+	"context"
 	"math"
 	"sync"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/features"
+	"github.com/cgn175/quant-bot/internal/metrics"
+	"github.com/cgn175/quant-bot/internal/mlfilter"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,6 +60,12 @@ type TrendConfig struct {
 	FirstExitPct       float64 // 0.25 — close 25%
 	SecondTargetR      float64 // 6.0 — second partial at 6R
 	SecondExitPct      float64 // 0.25 — close 25%
+
+	// ML filter parameters
+	MLFilterEnabled bool
+	MLThreshold     float64
+	FallbackToADX   bool
+	FailOpen        bool
 }
 
 // SectorMap classifies trading symbols by sector for correlation management (Patch 3).
@@ -196,7 +205,9 @@ type PartialExitSignal struct {
 
 // TrendStrategy implements the Plan D pure trend-following system.
 type TrendStrategy struct {
-	config TrendConfig
+	config   TrendConfig
+	mlClient *mlfilter.Client
+	prom     *metrics.Metrics
 
 	mu        sync.Mutex
 	positions map[string]*TrendPosition
@@ -207,13 +218,45 @@ type TrendStrategy struct {
 	dailyHalted    bool
 }
 
+// TrendStrategyOption configures optional dependencies for TrendStrategy.
+type TrendStrategyOption func(*TrendStrategy)
+
+// WithMLClient sets the ML filter client.
+func WithMLClient(c *mlfilter.Client) TrendStrategyOption {
+	return func(ts *TrendStrategy) { ts.mlClient = c }
+}
+
+// WithMetrics sets the Prometheus metrics collector.
+func WithMetrics(m *metrics.Metrics) TrendStrategyOption {
+	return func(ts *TrendStrategy) { ts.prom = m }
+}
+
 // NewTrendStrategy creates a new trend-following strategy with the given config.
-func NewTrendStrategy(config TrendConfig) *TrendStrategy {
-	return &TrendStrategy{
+// An optional *mlfilter.Client can be passed to enable ML-based filtering;
+// pass nil to use the legacy ADX filter.
+func NewTrendStrategy(config TrendConfig, mlClient ...*mlfilter.Client) *TrendStrategy {
+	ts := &TrendStrategy{
 		config:         config,
 		positions:      make(map[string]*TrendPosition),
 		dailyResetDate: time.Now().UTC().Truncate(24 * time.Hour),
 	}
+	if len(mlClient) > 0 {
+		ts.mlClient = mlClient[0]
+	}
+	return ts
+}
+
+// NewTrendStrategyWithOpts creates a TrendStrategy with functional options.
+func NewTrendStrategyWithOpts(config TrendConfig, opts ...TrendStrategyOption) *TrendStrategy {
+	ts := &TrendStrategy{
+		config:         config,
+		positions:      make(map[string]*TrendPosition),
+		dailyResetDate: time.Now().UTC().Truncate(24 * time.Hour),
+	}
+	for _, opt := range opts {
+		opt(ts)
+	}
+	return ts
 }
 
 // GetPosition returns a copy of the trend position for a symbol, or nil.
@@ -568,11 +611,54 @@ func (ts *TrendStrategy) OnBar(
 	// Layer 2: Regime filters
 	// ---------------------------------------------------------------
 
-	// 2a. ADX filter — trend must exist
-	adxVals := features.ADX(candles, cfg.ADXPeriod)
-	if adxVals == nil || adxVals[idx] < cfg.ADXThreshold {
-		log.Debug().Str("symbol", symbol).Float64("adx", safeIdx(adxVals, idx)).Msg("ADX filter blocked signal")
-		return nil
+	// 2a. Regime filter — ML probability gate OR legacy ADX
+	if ts.mlClient != nil && ts.mlClient.IsEnabled() {
+		mlFeatures := BuildMLFeatures(candles, fundingCache, symbol, idx, cfg)
+		mlStart := time.Now()
+		prob, err := ts.mlClient.Predict(context.Background(), symbol, mlFeatures)
+		if ts.prom != nil {
+			ts.prom.MLFilterLatency.Observe(time.Since(mlStart).Seconds())
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("symbol", symbol).Msg("ML filter error")
+			if ts.prom != nil {
+				ts.prom.MLFilterErrorsTotal.Inc()
+			}
+			if cfg.FallbackToADX {
+				if ts.prom != nil {
+					ts.prom.MLFilterFallbackTotal.Inc()
+				}
+				adxVals := features.ADX(candles, cfg.ADXPeriod)
+				if adxVals == nil || adxVals[idx] < cfg.ADXThreshold {
+					if ts.prom != nil {
+						ts.prom.ADXFilterBlockedTotal.WithLabelValues(symbol).Inc()
+					}
+					return nil
+				}
+			} else if !cfg.FailOpen {
+				return nil
+			}
+		} else {
+			if ts.prom != nil {
+				ts.prom.MLFilterProb.WithLabelValues(symbol).Set(prob)
+			}
+			if prob < cfg.MLThreshold {
+				log.Debug().Str("symbol", symbol).Float64("prob", prob).Float64("threshold", cfg.MLThreshold).Msg("ML filter blocked signal")
+				if ts.prom != nil {
+					ts.prom.MLFilterBlockedTotal.WithLabelValues(symbol).Inc()
+				}
+				return nil
+			}
+		}
+	} else {
+		adxVals := features.ADX(candles, cfg.ADXPeriod)
+		if adxVals == nil || adxVals[idx] < cfg.ADXThreshold {
+			log.Debug().Str("symbol", symbol).Float64("adx", safeIdx(adxVals, idx)).Msg("ADX filter blocked signal")
+			if ts.prom != nil {
+				ts.prom.ADXFilterBlockedTotal.WithLabelValues(symbol).Inc()
+			}
+			return nil
+		}
 	}
 
 	// 2b. Volatility filter — ATR(14) / ATR(50) in normal range
@@ -638,7 +724,7 @@ func (ts *TrendStrategy) OnBar(
 		Float64("price", last.Close).
 		Float64("stop_loss", stopLoss).
 		Float64("atr", atrVal).
-		Float64("adx", adxVals[idx]).
+		Float64("adx", safeIdx(features.ADX(candles, cfg.ADXPeriod), idx)).
 		Float64("size_mult", sizeMultiplier).
 		Msg("trend entry signal generated")
 

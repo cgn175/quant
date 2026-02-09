@@ -1,6 +1,6 @@
 # Plan D: Implementation Progress
 
-## Status: 🟢 Phase 2 COMPLETE — Ready for Phase 3 (Paper Trading)
+## Status: 🟡 Phase 3 IN PROGRESS — Paper Trading Active
 
 ### Phase 0: Data Preparation
 | Task | Status | Notes |
@@ -28,17 +28,19 @@
 | 2.4 data/funding.go — FundingCache | ✅ Done | Thread-safe, Add/MovingAverage/IsExtreme/IsLongCrowded/IsShortCrowded/SizeMultiplier |
 | 2.5 config.yaml — Trend following config | ✅ Done | strategy.type=trend_following, funding_filter, partial_exits sections |
 | 2.6 cmd/bot/main.go — trendStrategyLoop | ✅ Done | runTrendFollowing entry point, trendSymbolLoop, handleTrendTick/Entry/PartialExit |
+| 2.7 SQLite persistence for warm-up | ✅ Done | Candles persist across restarts, immediate indicator calculation |
 
 ### Phase 3: Paper Trading
 | Task | Status | Notes |
 |------|--------|-------|
-| 3.1 Paper trading (2-4 weeks) | ⬜ Not Started | |
-| 3.2 Validation criteria check | ⬜ Not Started | |
+| 3.1 Paper trading (2-4 weeks) | 🟡 In Progress | Bot running with `mode: paper`, started 2025-02-08 |
+| 3.2 SQLite warm-up persistence | ✅ Done | Historical candles loaded from `data/candles.db` on startup |
+| 3.3 Validation criteria check | 🟡 Ready | `scripts/validate_paper_trading.py` created — run after 2+ weeks |
 
 ### Phase 4: Live Deployment
 | Task | Status | Notes |
 |------|--------|-------|
-| 4.1 Small capital deployment | ⬜ Not Started | |
+| 4.1 Small capital deployment | ⬜ Not Started | Change `mode: live` in config.yaml, restart bot |
 | 4.2 Scale up | ⬜ Not Started | |
 
 ---
@@ -309,13 +311,15 @@ run()
 - **Existing types reused**: `strategy.Signal`, `SignalType`, `SignalNone/Long/Short` — `Prediction` and `Features` set to `nil` for trend mode
 - **Risk manager extended**: `ReducePosition` is additive, `ClosePosition` unchanged
 
-### What's Next — Phase 3: Paper Trading
+### Phase 3: Paper Trading (CURRENT)
+
+**Status**: 🟡 Bot running in paper mode
 
 ```bash
 ./bin/bot --config config.yaml    # strategy.type: trend_following, mode: paper
 ```
 
-Monitor for 2–4 weeks:
+**Monitor for 2–4 weeks:**
 - Entry/exit timing vs Python backtest expectations
 - Trailing stop mechanics (never moves against position)
 - Funding rate filter activations
@@ -323,3 +327,73 @@ Monitor for 2–4 weeks:
 - Daily loss cap triggering
 - Correlation limits (max 2 same-direction)
 - Prometheus metrics + Telegram alerts
+
+**SQLite Warm-up (Implemented)**:
+- Historical candles persisted to `data/candles.db`
+- On restart: `LoadHistory()` populates in-memory store immediately
+- No more waiting for 50+ candles to accumulate — indicators work from first tick
+
+**Validation Script (Task 3.3)**:
+Run after 2-4 weeks of paper trading to check all criteria:
+
+```bash
+python3 scripts/validate_paper_trading.py --log bot.log
+```
+
+The script validates:
+1. No bugs in trailing stop logic
+2. All regime filters activating correctly
+3. Partial exits triggering at correct R-levels (3R, 6R)
+4. Daily loss cap working (-3% equity)
+5. Correlation limits enforced (max 2 same-direction)
+6. Trade metrics within expected ranges (WR 35-42%, W/L 2.0-3.0)
+
+**Validation Criteria** (from PLAN_D_IMPLEMENTATION.md):
+- [ ] No bugs in trailing stop logic (verified against Python backtest)
+- [ ] All regime filters activating correctly
+- [ ] Partial exits triggering at correct R-levels
+- [ ] Daily loss cap working
+- [ ] Correlation limits enforced
+- [ ] Prometheus metrics reporting correctly
+- [ ] Telegram alerts firing on trade open/close/daily summary
+
+---
+
+### Phase 4: Transitioning to Live Trading
+
+**When Paper Trading is Complete** (after 2-4 weeks of validation):
+
+1. **Review paper trading results**:
+   - Compare actual signals/trades with Python backtest expectations
+   - Verify trailing stops, partial exits, funding filters worked correctly
+   - Check no unexpected errors or missed signals in logs
+
+2. **Switch to live mode** — just change config and restart:
+   ```yaml
+   # config.yaml
+   mode: live    # was: paper
+   ```
+   
+   ```bash
+   # Restart the bot
+   pkill -f "bin/bot" || true
+   ./bin/bot --config config.yaml
+   ```
+
+3. **What changes in live mode**:
+   - `PaperExecutor` → `LiveExecutor` (actual orders sent to Binance)
+   - Real API calls to place/cancel/modify orders
+   - Real slippage and fees (not simulated)
+   - Everything else stays the same (strategy logic, risk management, indicators)
+
+4. **Start with small capital**:
+   - Initial deployment: $500–$1,000
+   - `risk.initial_equity: 1000.0` in config.yaml
+   - Monitor closely for first 1-2 weeks
+
+5. **Scale up gradually**:
+   - If live results match paper trading expectations
+   - Increase `initial_equity` incrementally
+   - Never risk more than you can afford to lose
+
+**No code changes required** — the bot architecture already supports both modes via the executor abstraction.

@@ -40,6 +40,14 @@ type Metrics struct {
 	OrderExecutionTime   prometheus.Histogram
 	SentimentAPILatency  prometheus.Histogram
 	SignalGenerationTime prometheus.Histogram
+
+	// ML Filter metrics
+	MLFilterProb          prometheus.GaugeVec
+	MLFilterErrorsTotal   prometheus.Counter
+	MLFilterBlockedTotal  prometheus.CounterVec
+	ADXFilterBlockedTotal prometheus.CounterVec
+	MLFilterLatency       prometheus.Histogram
+	MLFilterFallbackTotal prometheus.Counter
 }
 
 // NewMetrics creates and registers prometheus metrics
@@ -147,6 +155,33 @@ func NewMetrics() *Metrics {
 			Name: "signal_generation_duration_seconds",
 			Help: "Signal generation latency",
 			Buckets: []float64{.001, .01, .05, .1},
+		}),
+
+		// ML Filter metrics
+		MLFilterProb: *promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ml_filter_probability",
+			Help: "Last ML probability per symbol",
+		}, []string{"symbol"}),
+		MLFilterErrorsTotal: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "ml_filter_errors_total",
+			Help: "Total ML service errors",
+		}),
+		MLFilterBlockedTotal: *promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "ml_filter_blocked_total",
+			Help: "Entries blocked by ML filter per symbol",
+		}, []string{"symbol"}),
+		ADXFilterBlockedTotal: *promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "adx_filter_blocked_total",
+			Help: "Entries blocked by ADX filter per symbol",
+		}, []string{"symbol"}),
+		MLFilterLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name: "ml_filter_latency_seconds",
+			Help: "ML service call latency",
+			Buckets: []float64{.005, .01, .025, .05, .1, .2, .5},
+		}),
+		MLFilterFallbackTotal: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "ml_filter_fallback_total",
+			Help: "Times ML filter fell back to ADX",
 		}),
 	}
 }

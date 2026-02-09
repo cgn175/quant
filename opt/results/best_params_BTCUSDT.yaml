@@ -1,0 +1,10 @@
+symbol: BTCUSDT
+optimized_at: '2026-02-09T00:48:09.056325+00:00'
+sortino_ratio: 34.1452
+params:
+  donchian_period: 28
+  ema_fast: 6
+  ema_slow: 29
+  atr_stop_multiplier: 3.0
+  adx_threshold: 28
+  chandelier_lookback: 17

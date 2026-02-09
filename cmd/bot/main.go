@@ -22,6 +22,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/execution"
 	"github.com/cgn175/quant-bot/internal/features"
 	"github.com/cgn175/quant-bot/internal/metrics"
+	"github.com/cgn175/quant-bot/internal/mlfilter"
 	"github.com/cgn175/quant-bot/internal/model"
 	"github.com/cgn175/quant-bot/internal/risk"
 	"github.com/cgn175/quant-bot/internal/sentiment"
@@ -158,7 +159,33 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		SecondTargetR:      cfg.Strategy.PartialExits.SecondTargetR,
 		SecondExitPct:      cfg.Strategy.PartialExits.SecondExitPct,
 	}
-	trendStrat := strategy.NewTrendStrategy(trendCfg)
+
+	// Prometheus metrics (initialized early so strategy can reference them)
+	prom := metrics.NewMetrics()
+	prom.MaxOpenPositions.Set(float64(cfg.Risk.MaxOpenPositions))
+
+	var mlClient *mlfilter.Client
+	if cfg.Strategy.MLFilter.Enabled {
+		mlClient = mlfilter.NewClient(mlfilter.Config{
+			Enabled:       true,
+			URL:           cfg.Strategy.MLFilter.URL,
+			Threshold:     cfg.Strategy.MLFilter.Threshold,
+			TimeoutMs:     cfg.Strategy.MLFilter.TimeoutMs,
+			FailOpen:      cfg.Strategy.MLFilter.FailOpen,
+			FallbackToADX: cfg.Strategy.MLFilter.FallbackToADX,
+		})
+		trendCfg.MLFilterEnabled = true
+		trendCfg.MLThreshold = cfg.Strategy.MLFilter.Threshold
+		trendCfg.FallbackToADX = cfg.Strategy.MLFilter.FallbackToADX
+		trendCfg.FailOpen = cfg.Strategy.MLFilter.FailOpen
+		log.Info().Str("url", cfg.Strategy.MLFilter.URL).Float64("threshold", cfg.Strategy.MLFilter.Threshold).Msg("ML filter enabled")
+	}
+	var opts []strategy.TrendStrategyOption
+	if mlClient != nil {
+		opts = append(opts, strategy.WithMLClient(mlClient))
+	}
+	opts = append(opts, strategy.WithMetrics(prom))
+	trendStrat := strategy.NewTrendStrategyWithOpts(trendCfg, opts...)
 
 	// Risk manager (reuse existing)
 	feePercent := cfg.Execution.FeePercent()
@@ -189,10 +216,6 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		FeePercent:     feePercent,
 	}
 	execEngine := execution.NewEngine(execConfig, executor)
-
-	// Prometheus metrics
-	prom := metrics.NewMetrics()
-	prom.MaxOpenPositions.Set(float64(cfg.Risk.MaxOpenPositions))
 
 	metricsPort := cfg.Monitoring.PrometheusPort
 	if metricsPort == 0 {

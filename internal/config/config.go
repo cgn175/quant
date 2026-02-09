@@ -105,6 +105,18 @@ type StrategyConfig struct {
 	PartialExits   PartialExitsConfig   `mapstructure:"partial_exits"`
 	ChandelierLookback int             `mapstructure:"chandelier_lookback"`
 	MaxPositionsPerSector int          `mapstructure:"max_positions_per_sector"` // Patch 3: Correlation Guard
+	MLFilter       MLFilterConfig       `mapstructure:"ml_filter"`
+	Variant        string               `mapstructure:"variant"`
+}
+
+// MLFilterConfig holds ML inference filter parameters.
+type MLFilterConfig struct {
+	Enabled       bool    `mapstructure:"enabled"`
+	URL           string  `mapstructure:"url"`
+	Threshold     float64 `mapstructure:"threshold"`
+	TimeoutMs     int     `mapstructure:"timeout_ms"`
+	FailOpen      bool    `mapstructure:"fail_open"`
+	FallbackToADX bool    `mapstructure:"fallback_to_adx"`
 }
 
 // FundingFilterConfig holds funding rate filter parameters.
@@ -290,6 +302,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.partial_exits.first_exit_pct", 0.25)
 	v.SetDefault("strategy.partial_exits.second_target_r", 6.0)
 	v.SetDefault("strategy.partial_exits.second_exit_pct", 0.25)
+	v.SetDefault("strategy.ml_filter.enabled", false)
+	v.SetDefault("strategy.ml_filter.url", "http://localhost:9001")
+	v.SetDefault("strategy.ml_filter.threshold", 0.65)
+	v.SetDefault("strategy.ml_filter.timeout_ms", 200)
+	v.SetDefault("strategy.ml_filter.fail_open", false)
+	v.SetDefault("strategy.ml_filter.fallback_to_adx", true)
+	v.SetDefault("strategy.variant", "")
 
 	// Storage defaults
 	v.SetDefault("storage.candle_db_path", "candles.db")
