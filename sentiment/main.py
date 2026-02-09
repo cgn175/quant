@@ -120,6 +120,19 @@ class InsightReportResponse(BaseModel):
     reasoning: list[str]
     risk_level: str
     suggested_action: str
+    
+    # 7-day baseline metrics
+    sentiment_zscore_7d: float
+    mentions_zscore_7d: float
+    sentiment_percentile_7d: float
+    sentiment_momentum_6h: float
+    sentiment_momentum_24h: float
+    attention_momentum: float
+    regime: str
+    regime_confidence: float
+    
+    # Alerts
+    alerts: list[dict]  # List of alert objects
 
 
 class HealthResponse(BaseModel):
@@ -289,6 +302,25 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
             reasoning=report.recommendation.reasoning,
             risk_level=report.recommendation.risk_level,
             suggested_action=report.recommendation.suggested_action,
+            sentiment_zscore_7d=report.baseline_metrics.sentiment_zscore_7d,
+            mentions_zscore_7d=report.baseline_metrics.mentions_zscore_7d,
+            sentiment_percentile_7d=report.baseline_metrics.sentiment_percentile_7d,
+            sentiment_momentum_6h=report.baseline_metrics.sentiment_momentum_6h,
+            sentiment_momentum_24h=report.baseline_metrics.sentiment_momentum_24h,
+            attention_momentum=report.baseline_metrics.attention_momentum,
+            regime=report.baseline_metrics.regime,
+            regime_confidence=report.baseline_metrics.regime_confidence,
+            alerts=[
+                {
+                    "alert_type": alert.alert_type,
+                    "severity": alert.severity,
+                    "trigger_value": alert.trigger_value,
+                    "threshold": alert.threshold,
+                    "description": alert.description,
+                    "suggested_action": alert.suggested_action,
+                }
+                for alert in report.alerts
+            ],
         )
     except HTTPException:
         raise

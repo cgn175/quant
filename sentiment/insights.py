@@ -62,6 +62,32 @@ class Recommendation:
 
 
 @dataclass
+class BaselineMetrics:
+    """7-day baseline metrics for relative context."""
+    
+    sentiment_zscore_7d: float  # How extreme vs 7d baseline
+    mentions_zscore_7d: float   # Attention anomaly
+    sentiment_percentile_7d: float  # 0-100, more robust than z-score
+    sentiment_momentum_6h: float   # Recent vs 6h ago
+    sentiment_momentum_24h: float  # Recent vs 24h ago
+    attention_momentum: float      # Mentions rate-of-change
+    regime: str  # "quiet", "news_driven", "conflicted", "panic"
+    regime_confidence: float
+
+
+@dataclass
+class SentimentAlert:
+    """Alert condition based on 7-day context."""
+    
+    alert_type: str  # Type of alert
+    severity: str    # "low", "medium", "high", "critical"
+    trigger_value: float
+    threshold: float
+    description: str
+    suggested_action: str
+
+
+@dataclass
 class InsightReport:
     """Complete sentiment intelligence report."""
     
@@ -72,6 +98,8 @@ class InsightReport:
     source_diversity: SourceDiversity
     trend: TrendAnalysis
     recommendation: Recommendation
+    baseline_metrics: BaselineMetrics
+    alerts: List[SentimentAlert]
 
 
 class InsightsGenerator:
@@ -440,6 +468,265 @@ class InsightsGenerator:
             suggested_action=suggested_action,
         )
     
+    def compute_baseline_metrics(
+        self,
+        symbol: str,
+        current_score: float,
+        current_mentions: int,
+        historical_scores: List[Tuple[datetime, float]],
+        historical_mentions: List[Tuple[datetime, int]],
+        source_diversity: SourceDiversity,
+    ) -> BaselineMetrics:
+        """Compute 7-day baseline metrics for relative context.
+        
+        Args:
+            symbol: Trading symbol
+            current_score: Current sentiment score
+            current_mentions: Current mention count
+            historical_scores: Historical sentiment data (7 days)
+            historical_mentions: Historical mention counts (7 days)
+            source_diversity: Source diversity metrics
+            
+        Returns:
+            BaselineMetrics with relative indicators
+        """
+        if len(historical_scores) < 24:
+            # Insufficient data for meaningful metrics
+            return BaselineMetrics(
+                sentiment_zscore_7d=0.0,
+                mentions_zscore_7d=0.0,
+                sentiment_percentile_7d=50.0,
+                sentiment_momentum_6h=0.0,
+                sentiment_momentum_24h=0.0,
+                attention_momentum=0.0,
+                regime="insufficient_data",
+                regime_confidence=0.0,
+            )
+        
+        # Calculate 7-day z-scores
+        all_scores = [score for _, score in historical_scores]
+        all_mentions = [count for _, count in historical_mentions]
+        
+        sentiment_mean = statistics.mean(all_scores)
+        sentiment_stdev = statistics.stdev(all_scores) if len(all_scores) > 1 else 0.0
+        
+        if sentiment_stdev > 0:
+            sentiment_zscore_7d = (current_score - sentiment_mean) / sentiment_stdev
+        else:
+            sentiment_zscore_7d = 0.0
+        
+        mentions_mean = statistics.mean(all_mentions)
+        mentions_stdev = statistics.stdev(all_mentions) if len(all_mentions) > 1 else 0.0
+        
+        if mentions_stdev > 0:
+            mentions_zscore_7d = (current_mentions - mentions_mean) / mentions_stdev
+        else:
+            mentions_zscore_7d = 0.0
+        
+        # Calculate percentile (more robust than z-score)
+        sorted_scores = sorted(all_scores)
+        rank = sum(1 for s in sorted_scores if s <= current_score)
+        sentiment_percentile_7d = (rank / len(sorted_scores)) * 100.0
+        
+        # Calculate momentum (6h and 24h)
+        now = datetime.now(timezone.utc)
+        recent_6h = [score for ts, score in historical_scores if ts >= now - timedelta(hours=6)]
+        recent_24h = [score for ts, score in historical_scores if ts >= now - timedelta(hours=24)]
+        older_6h = [score for ts, score in historical_scores if now - timedelta(hours=12) <= ts < now - timedelta(hours=6)]
+        older_24h = [score for ts, score in historical_scores if now - timedelta(hours=48) <= ts < now - timedelta(hours=24)]
+        
+        if recent_6h and older_6h:
+            sentiment_momentum_6h = statistics.mean(recent_6h) - statistics.mean(older_6h)
+        else:
+            sentiment_momentum_6h = 0.0
+        
+        if recent_24h and older_24h:
+            sentiment_momentum_24h = statistics.mean(recent_24h) - statistics.mean(older_24h)
+        else:
+            sentiment_momentum_24h = 0.0
+        
+        # Calculate attention momentum (mentions rate of change)
+        recent_mentions_6h = [count for ts, count in historical_mentions if ts >= now - timedelta(hours=6)]
+        older_mentions_6h = [count for ts, count in historical_mentions if now - timedelta(hours=12) <= ts < now - timedelta(hours=6)]
+        
+        if recent_mentions_6h and older_mentions_6h:
+            recent_avg = statistics.mean(recent_mentions_6h)
+            older_avg = statistics.mean(older_mentions_6h)
+            if older_avg > 0:
+                attention_momentum = (recent_avg - older_avg) / older_avg
+            else:
+                attention_momentum = 0.0
+        else:
+            attention_momentum = 0.0
+        
+        # Determine regime
+        regime, regime_confidence = self._detect_regime(
+            mentions_zscore_7d,
+            source_diversity.source_agreement,
+            sentiment_stdev,
+        )
+        
+        return BaselineMetrics(
+            sentiment_zscore_7d=round(sentiment_zscore_7d, 4),
+            mentions_zscore_7d=round(mentions_zscore_7d, 4),
+            sentiment_percentile_7d=round(sentiment_percentile_7d, 2),
+            sentiment_momentum_6h=round(sentiment_momentum_6h, 4),
+            sentiment_momentum_24h=round(sentiment_momentum_24h, 4),
+            attention_momentum=round(attention_momentum, 4),
+            regime=regime,
+            regime_confidence=round(regime_confidence, 4),
+        )
+    
+    def _detect_regime(
+        self,
+        mentions_zscore: float,
+        source_agreement: float,
+        volatility: float,
+    ) -> Tuple[str, float]:
+        """Detect market regime from 7-day context.
+        
+        Args:
+            mentions_zscore: Z-score of current mentions vs 7d
+            source_agreement: Source agreement metric
+            volatility: Sentiment volatility
+            
+        Returns:
+            (regime_name, confidence)
+        """
+        # Panic: high mentions + low agreement + high volatility
+        if mentions_zscore > 2.0 and source_agreement < 0.4 and volatility > 0.3:
+            return ("panic", 0.9)
+        
+        # News-driven: high mentions + moderate agreement
+        if mentions_zscore > 1.5 and source_agreement > 0.5:
+            return ("news_driven", 0.8)
+        
+        # Conflicted: low agreement regardless of mentions
+        if source_agreement < 0.3:
+            return ("conflicted", 0.7)
+        
+        # Quiet: low mentions + high agreement
+        if mentions_zscore < -0.5 and source_agreement > 0.7:
+            return ("quiet", 0.8)
+        
+        # Default: normal
+        return ("normal", 0.5)
+    
+    def generate_alerts(
+        self,
+        symbol: str,
+        baseline_metrics: BaselineMetrics,
+        themes: ThemeAnalysis,
+        trend: TrendAnalysis,
+        source_diversity: SourceDiversity,
+    ) -> List[SentimentAlert]:
+        """Generate alerts based on 7-day context.
+        
+        Args:
+            symbol: Trading symbol
+            baseline_metrics: 7-day baseline metrics
+            themes: Theme analysis
+            trend: Trend analysis
+            source_diversity: Source diversity metrics
+            
+        Returns:
+            List of SentimentAlert objects
+        """
+        alerts = []
+        
+        # Sentiment breakout
+        if abs(baseline_metrics.sentiment_zscore_7d) > 2.5:
+            direction = "positive" if baseline_metrics.sentiment_zscore_7d > 0 else "negative"
+            alerts.append(SentimentAlert(
+                alert_type="sentiment_breakout",
+                severity="high" if abs(baseline_metrics.sentiment_zscore_7d) > 3.0 else "medium",
+                trigger_value=baseline_metrics.sentiment_zscore_7d,
+                threshold=2.5,
+                description=f"Sentiment breakout: {direction} sentiment is {abs(baseline_metrics.sentiment_zscore_7d):.1f} std devs from 7d mean",
+                suggested_action="Consider entry if confirmed by price action" if direction == "positive" else "Consider exit or hedge",
+            ))
+        
+        # Attention spike
+        if baseline_metrics.mentions_zscore_7d > 3.0:
+            alerts.append(SentimentAlert(
+                alert_type="attention_spike",
+                severity="critical" if baseline_metrics.mentions_zscore_7d > 4.0 else "high",
+                trigger_value=baseline_metrics.mentions_zscore_7d,
+                threshold=3.0,
+                description=f"Attention spike: mentions are {baseline_metrics.mentions_zscore_7d:.1f} std devs above normal",
+                suggested_action="Monitor for significant news/events, volatility likely",
+            ))
+        
+        # Agreement collapse (from historical high)
+        if source_diversity.source_agreement < 0.3:
+            alerts.append(SentimentAlert(
+                alert_type="agreement_collapse",
+                severity="medium",
+                trigger_value=source_diversity.source_agreement,
+                threshold=0.3,
+                description=f"Source agreement collapsed to {source_diversity.source_agreement:.2f} - conflicting narratives",
+                suggested_action="Reduce position size, wait for clearer signals",
+            ))
+        
+        # Security shock
+        if "security" in themes.recurring_themes:
+            security_sent = themes.sentiment_by_theme.get("security", 0.0)
+            if security_sent < -0.4 and baseline_metrics.mentions_zscore_7d > 2.0:
+                alerts.append(SentimentAlert(
+                    alert_type="security_shock",
+                    severity="critical",
+                    trigger_value=security_sent,
+                    threshold=-0.4,
+                    description=f"Security risk elevated: negative theme with high attention (sentiment: {security_sent:.2f})",
+                    suggested_action="Consider exit - security incidents typically precede price drops",
+                ))
+        
+        # Regulation risk
+        if "regulation" in themes.recurring_themes:
+            regulation_sent = themes.sentiment_by_theme.get("regulation", 0.0)
+            if regulation_sent < -0.3 and trend.trend_direction == "deteriorating":
+                alerts.append(SentimentAlert(
+                    alert_type="regulation_risk",
+                    severity="high",
+                    trigger_value=regulation_sent,
+                    threshold=-0.3,
+                    description=f"Regulatory headwinds: negative regulation theme with deteriorating trend",
+                    suggested_action="Reduce exposure - regulatory concerns create uncertainty",
+                ))
+        
+        # Momentum surge
+        if baseline_metrics.sentiment_momentum_6h > 0.2 and baseline_metrics.sentiment_momentum_24h > 0.15:
+            alerts.append(SentimentAlert(
+                alert_type="momentum_surge",
+                severity="medium",
+                trigger_value=baseline_metrics.sentiment_momentum_6h,
+                threshold=0.2,
+                description=f"Strong positive momentum: sentiment improving rapidly",
+                suggested_action="Consider entry on pullback - momentum likely to continue",
+            ))
+        
+        # Regime warning
+        if baseline_metrics.regime == "panic":
+            alerts.append(SentimentAlert(
+                alert_type="regime_panic",
+                severity="critical",
+                trigger_value=baseline_metrics.regime_confidence,
+                threshold=0.7,
+                description="Market in panic regime: high attention, low agreement, high volatility",
+                suggested_action="Reduce risk - wait for stabilization before entering",
+            ))
+        elif baseline_metrics.regime == "conflicted":
+            alerts.append(SentimentAlert(
+                alert_type="regime_conflicted",
+                severity="medium",
+                trigger_value=source_diversity.source_agreement,
+                threshold=0.3,
+                description="Market in conflicted regime: sources disagree on narrative",
+                suggested_action="Wait for consensus - mixed signals increase risk",
+            ))
+        
+        return alerts
+    
     def generate_report(
         self,
         symbol: str,
@@ -472,6 +759,12 @@ class InsightsGenerator:
         recommendation = self.generate_recommendation(
             current_score, trend, source_diversity, themes
         )
+        baseline_metrics = self.compute_baseline_metrics(
+            symbol, current_score, current_mentions, historical_scores, historical_mentions, source_diversity
+        )
+        alerts = self.generate_alerts(
+            symbol, baseline_metrics, themes, trend, source_diversity
+        )
         
         return InsightReport(
             symbol=symbol,
@@ -481,4 +774,6 @@ class InsightsGenerator:
             source_diversity=source_diversity,
             trend=trend,
             recommendation=recommendation,
+            baseline_metrics=baseline_metrics,
+            alerts=alerts,
         )
