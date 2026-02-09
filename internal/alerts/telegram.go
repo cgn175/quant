@@ -38,29 +38,36 @@ type StatusProvider interface {
 
 // StatusInfo contains bot status information for the /status command.
 type StatusInfo struct {
-	Mode              string
-	Uptime            time.Duration
-	OpenPositions     int
-	DailyPnL          float64
-	Equity            float64
-	CandlesPerSymbol  map[string]int64
-	LastCandleTime    map[string]time.Time
-	WebSocketStatus   string
-	MemoryUsageMB     float64
+	Mode             string
+	Uptime           time.Duration
+	OpenPositions    int
+	DailyPnL         float64
+	Equity           float64
+	CandlesPerSymbol map[string]int64
+	LastCandleTime   map[string]time.Time
+	WebSocketStatus  string
+	MemoryUsageMB    float64
+}
+
+// SentimentProvider is an interface for sentiment data.
+type SentimentProvider interface {
+	GetSymbols() []string
+	GetSentimentData(symbol string) map[string]interface{}
 }
 
 // Manager handles telegram alerts
 type Manager struct {
-	mu           sync.Mutex
-	bot          *tgbotapi.BotAPI
-	chatID       int64
-	enabled      bool
-	rateLimit    time.Duration
-	lastAlertMap map[string]time.Time // prevent spam
-	log          zerolog.Logger
-	startTime    time.Time
-	statusProvider StatusProvider
-	cancelFunc   context.CancelFunc
+	mu                sync.Mutex
+	bot               *tgbotapi.BotAPI
+	chatID            int64
+	enabled           bool
+	rateLimit         time.Duration
+	lastAlertMap      map[string]time.Time // prevent spam
+	log               zerolog.Logger
+	startTime         time.Time
+	statusProvider    StatusProvider
+	sentimentProvider SentimentProvider
+	cancelFunc        context.CancelFunc
 }
 
 // Config for alert manager
@@ -107,6 +114,13 @@ func (m *Manager) SetStatusProvider(provider StatusProvider) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.statusProvider = provider
+}
+
+// SetSentimentProvider sets the sentiment provider for the /markets-news command.
+func (m *Manager) SetSentimentProvider(provider SentimentProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sentimentProvider = provider
 }
 
 // StartCommandListener starts listening for Telegram commands in a background goroutine.
@@ -160,6 +174,8 @@ func (m *Manager) commandLoop(ctx context.Context) {
 			switch update.Message.Command() {
 			case "status":
 				m.handleStatusCommand(update.Message)
+			case "markets-news":
+				m.handleMarketsNewsCommand(update.Message)
 			case "help":
 				m.handleHelpCommand(update.Message)
 			}
@@ -178,7 +194,7 @@ func (m *Manager) handleStatusCommand(msg *tgbotapi.Message) {
 
 	if provider != nil {
 		info := provider.GetStatusInfo()
-		
+
 		// Format uptime
 		uptime := time.Since(startTime)
 		uptimeStr := formatDuration(uptime)
@@ -255,11 +271,78 @@ _Status provider not configured_`,
 	}
 }
 
+// handleMarketsNewsCommand handles the /markets-news command.
+func (m *Manager) handleMarketsNewsCommand(msg *tgbotapi.Message) {
+	m.mu.Lock()
+	provider := m.sentimentProvider
+	m.mu.Unlock()
+
+	var newsMsg string
+
+	if provider == nil {
+		newsMsg = "❌ Sentiment service not available. Please configure sentiment in config.yaml"
+	} else {
+		symbols := provider.GetSymbols()
+		if len(symbols) == 0 {
+			newsMsg = "⚠️ No symbols configured for sentiment analysis"
+		} else {
+			var lines []string
+			lines = append(lines, "📰 *Market Sentiment News*\n")
+
+			for _, symbol := range symbols {
+				sentimentData := provider.GetSentimentData(symbol)
+				if sentimentData == nil {
+					continue
+				}
+
+				// Extract data
+				score24h, _ := sentimentData["score_24h"].(float64)
+				mentions, _ := sentimentData["mentions"].(int)
+				velocity, _ := sentimentData["velocity"].(float64)
+				sources, _ := sentimentData["sources"].([]string)
+
+				// Determine emoji based on score
+				emoji := "➡️"
+				if score24h > 0.3 {
+					emoji = "📈"
+				} else if score24h < -0.3 {
+					emoji = "📉"
+				}
+
+				sourcesStr := "reddit"
+				if len(sources) > 0 {
+					sourcesStr = strings.Join(sources, ", ")
+				}
+
+				symbolLine := fmt.Sprintf("%s *%s*\n  Score: %.2f | Mentions: %d | Velocity: %.2f\n  Sources: %s",
+					emoji, symbol, score24h, mentions, velocity, sourcesStr)
+				lines = append(lines, symbolLine)
+			}
+
+			lines = append(lines, fmt.Sprintf("\n⏰ Updated: %s UTC", time.Now().UTC().Format("15:04")))
+			newsMsg = strings.Join(lines, "\n")
+		}
+	}
+
+	reply := tgbotapi.NewMessage(msg.Chat.ID, newsMsg)
+	reply.ParseMode = "MarkdownV2"
+	reply.ReplyToMessageID = msg.MessageID
+
+	if _, err := m.bot.Send(reply); err != nil {
+		// Retry without markdown
+		reply.ParseMode = ""
+		reply.Text = strings.ReplaceAll(newsMsg, "*", "")
+		reply.Text = strings.ReplaceAll(reply.Text, "_", "")
+		m.bot.Send(reply)
+	}
+}
+
 // handleHelpCommand handles the /help command.
 func (m *Manager) handleHelpCommand(msg *tgbotapi.Message) {
 	helpMsg := `🤖 *Quant Bot Commands*
 
 /status \\- Show bot status and health info
+/markets\\-news \\- Show market sentiment news
 /help \\- Show this help message`
 
 	reply := tgbotapi.NewMessage(msg.Chat.ID, helpMsg)
@@ -273,6 +356,8 @@ func (m *Manager) handleHelpCommand(msg *tgbotapi.Message) {
 		m.bot.Send(reply)
 	}
 }
+
+// ...existing code...
 
 // formatDuration formats a duration in a human-readable way.
 func formatDuration(d time.Duration) string {

@@ -329,6 +329,37 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 	))
 
 	// ------------------------------------------------------------------ //
+	//  Sentiment scheduler (optional, if enabled)                         //
+	// ------------------------------------------------------------------ //
+	var sentimentScheduler *sentiment.Scheduler
+	if cfg.Sentiment.Enabled {
+		sentimentClient := sentiment.NewClient(
+			cfg.Sentiment.URL,
+			time.Duration(cfg.Sentiment.PollIntervalSeconds)*time.Second,
+		)
+		sentimentClient.Start(cfg.Symbols)
+		defer sentimentClient.Stop()
+
+		sentimentScheduler = sentiment.NewScheduler(
+			sentimentClient,
+			alertMgr,
+			cfg.Sentiment.ScheduleTimes,
+			cfg.Symbols,
+		)
+		sentimentScheduler.Start()
+		defer sentimentScheduler.Stop()
+
+		// Set sentiment provider for /markets-news command
+		sentimentWrapper := sentiment.NewSentimentDataWrapper(sentimentClient, cfg.Symbols)
+		alertMgr.SetSentimentProvider(sentimentWrapper)
+
+		log.Info().
+			Strs("times", cfg.Sentiment.ScheduleTimes).
+			Str("url", cfg.Sentiment.URL).
+			Msg("sentiment scheduler enabled")
+	}
+
+	// ------------------------------------------------------------------ //
 	//  Exchange client                                                    //
 	// ------------------------------------------------------------------ //
 	exchangeClient := exchange.NewBinanceClient(cfg.Exchange.Testnet)
@@ -454,11 +485,11 @@ type trendDepsBundle struct {
 
 // botStatusProvider implements alerts.StatusProvider for the /status command.
 type botStatusProvider struct {
-	cfg          *config.Config
-	riskMgr      *risk.Manager
-	trendStrat   *strategy.TrendStrategy
-	prom         *metrics.Metrics
-	store        data.CandleStoreInterface
+	cfg        *config.Config
+	riskMgr    *risk.Manager
+	trendStrat *strategy.TrendStrategy
+	prom       *metrics.Metrics
+	store      data.CandleStoreInterface
 }
 
 // GetStatusInfo returns the current bot status.

@@ -102,6 +102,12 @@ sentiment:
   poll_interval_seconds: 60
   sentiment_threshold_long: 0.3
   sentiment_threshold_short: -0.3
+  enabled: false
+  schedule_times:
+    - "08:00"
+    - "16:00"
+  use_database: true
+  database_path: sentiment.db
 
 model:
   path: ""

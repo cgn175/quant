@@ -30,10 +30,14 @@ type ExchangeConfig struct {
 }
 
 type SentimentConfig struct {
-	URL                     string  `mapstructure:"url"`
-	PollIntervalSeconds     int     `mapstructure:"poll_interval_seconds"`
-	SentimentThresholdLong  float64 `mapstructure:"sentiment_threshold_long"`
-	SentimentThresholdShort float64 `mapstructure:"sentiment_threshold_short"`
+	URL                     string   `mapstructure:"url"`
+	PollIntervalSeconds     int      `mapstructure:"poll_interval_seconds"`
+	SentimentThresholdLong  float64  `mapstructure:"sentiment_threshold_long"`
+	SentimentThresholdShort float64  `mapstructure:"sentiment_threshold_short"`
+	Enabled                 bool     `mapstructure:"enabled"`
+	ScheduleTimes           []string `mapstructure:"schedule_times"`
+	UseDatabase             bool     `mapstructure:"use_database"`
+	DatabasePath            string   `mapstructure:"database_path"`
 }
 
 type RiskConfig struct {
@@ -88,27 +92,27 @@ type AlertsConfig struct {
 
 // StrategyConfig holds strategy-specific settings.
 type StrategyConfig struct {
-	Type           string              `mapstructure:"type"` // "ml", "trend_following"
-	DonchianPeriod int                 `mapstructure:"donchian_period"`
-	EMAFast        int                 `mapstructure:"ema_fast"`
-	EMASlow        int                 `mapstructure:"ema_slow"`
-	EMAConfirmBars int                 `mapstructure:"ema_confirm_bars"`
-	EMATrend       int                 `mapstructure:"ema_trend"`
-	VolumePeriod   int                 `mapstructure:"volume_period"`
-	ATRPeriod      int                 `mapstructure:"atr_period"`
-	ATRStopMult    float64             `mapstructure:"atr_stop_multiplier"`
-	ADXPeriod      int                 `mapstructure:"adx_period"`
-	ADXThreshold   float64             `mapstructure:"adx_threshold"`
-	VolatilityLow  float64             `mapstructure:"volatility_low"`
-	VolatilityHigh float64             `mapstructure:"volatility_high"`
-	FundingFilter  FundingFilterConfig  `mapstructure:"funding_filter"`
-	PartialExits   PartialExitsConfig   `mapstructure:"partial_exits"`
-	ChandelierLookback int             `mapstructure:"chandelier_lookback"`
-	MaxPositionsPerSector int          `mapstructure:"max_positions_per_sector"` // Patch 3: Correlation Guard
-	MLFilter       MLFilterConfig       `mapstructure:"ml_filter"`
-	RegimeFilter   RegimeFilterConfig   `mapstructure:"regime_filter"`
-	DynamicStop    DynamicStopConfig    `mapstructure:"dynamic_stop"`
-	Variant        string               `mapstructure:"variant"`
+	Type                  string              `mapstructure:"type"` // "ml", "trend_following"
+	DonchianPeriod        int                 `mapstructure:"donchian_period"`
+	EMAFast               int                 `mapstructure:"ema_fast"`
+	EMASlow               int                 `mapstructure:"ema_slow"`
+	EMAConfirmBars        int                 `mapstructure:"ema_confirm_bars"`
+	EMATrend              int                 `mapstructure:"ema_trend"`
+	VolumePeriod          int                 `mapstructure:"volume_period"`
+	ATRPeriod             int                 `mapstructure:"atr_period"`
+	ATRStopMult           float64             `mapstructure:"atr_stop_multiplier"`
+	ADXPeriod             int                 `mapstructure:"adx_period"`
+	ADXThreshold          float64             `mapstructure:"adx_threshold"`
+	VolatilityLow         float64             `mapstructure:"volatility_low"`
+	VolatilityHigh        float64             `mapstructure:"volatility_high"`
+	FundingFilter         FundingFilterConfig `mapstructure:"funding_filter"`
+	PartialExits          PartialExitsConfig  `mapstructure:"partial_exits"`
+	ChandelierLookback    int                 `mapstructure:"chandelier_lookback"`
+	MaxPositionsPerSector int                 `mapstructure:"max_positions_per_sector"` // Patch 3: Correlation Guard
+	MLFilter              MLFilterConfig      `mapstructure:"ml_filter"`
+	RegimeFilter          RegimeFilterConfig  `mapstructure:"regime_filter"`
+	DynamicStop           DynamicStopConfig   `mapstructure:"dynamic_stop"`
+	Variant               string              `mapstructure:"variant"`
 }
 
 // MLFilterConfig holds ML inference filter parameters.
@@ -125,11 +129,11 @@ type MLFilterConfig struct {
 type RegimeFilterConfig struct {
 	Enabled            bool              `mapstructure:"enabled"`
 	URL                string            `mapstructure:"url"`
-	Threshold          float64           `mapstructure:"threshold"`           // min prob_safe to allow trade
+	Threshold          float64           `mapstructure:"threshold"` // min prob_safe to allow trade
 	TimeoutMs          int               `mapstructure:"timeout_ms"`
 	FailOpen           bool              `mapstructure:"fail_open"`
 	FallbackToADX      bool              `mapstructure:"fallback_to_adx"`
-	SymbolVersions     map[string]string `mapstructure:"symbol_versions"`     // per-symbol model version ("v1" or "v2")
+	SymbolVersions     map[string]string `mapstructure:"symbol_versions"` // per-symbol model version ("v1" or "v2")
 	Ensemble           EnsembleConfig    `mapstructure:"ensemble"`
 	DirectionalSymbols []string          `mapstructure:"directional_symbols"` // symbols using LONG/SHORT models
 }
@@ -138,7 +142,7 @@ type RegimeFilterConfig struct {
 type EnsembleConfig struct {
 	Enabled    bool     `mapstructure:"enabled"`
 	MaxStopPct float64  `mapstructure:"max_stop_pct"` // max predicted stop % to allow entry
-	Symbols    []string `mapstructure:"symbols"`       // symbols to apply ensemble to
+	Symbols    []string `mapstructure:"symbols"`      // symbols to apply ensemble to
 }
 
 // DynamicStopConfig holds Volatility Predictor (Dynamic Stop-Loss) parameters.
@@ -147,27 +151,27 @@ type DynamicStopConfig struct {
 	URL        string  `mapstructure:"url"`
 	TimeoutMs  int     `mapstructure:"timeout_ms"`
 	FailOpen   bool    `mapstructure:"fail_open"`
-	K          float64 `mapstructure:"k"`              // multiplier for predicted range → stop %
-	MinStopPct float64 `mapstructure:"min_stop_pct"`   // floor (e.g., 0.01 = 1%)
-	MaxStopPct float64 `mapstructure:"max_stop_pct"`   // ceiling (e.g., 0.04 = 4%)
+	K          float64 `mapstructure:"k"`            // multiplier for predicted range → stop %
+	MinStopPct float64 `mapstructure:"min_stop_pct"` // floor (e.g., 0.01 = 1%)
+	MaxStopPct float64 `mapstructure:"max_stop_pct"` // ceiling (e.g., 0.04 = 4%)
 }
 
 // FundingFilterConfig holds funding rate filter parameters.
 type FundingFilterConfig struct {
-	Enabled            bool    `mapstructure:"enabled"`
-	ExtremeThreshold   float64 `mapstructure:"extreme_threshold"`
-	ElevatedThreshold  float64 `mapstructure:"elevated_threshold"`
-	SizeReduction      float64 `mapstructure:"size_reduction"`
-	PollIntervalSec    int     `mapstructure:"poll_interval_seconds"`
+	Enabled           bool    `mapstructure:"enabled"`
+	ExtremeThreshold  float64 `mapstructure:"extreme_threshold"`
+	ElevatedThreshold float64 `mapstructure:"elevated_threshold"`
+	SizeReduction     float64 `mapstructure:"size_reduction"`
+	PollIntervalSec   int     `mapstructure:"poll_interval_seconds"`
 }
 
 // PartialExitsConfig holds partial exit parameters.
 type PartialExitsConfig struct {
-	Enabled        bool    `mapstructure:"enabled"`
-	FirstTargetR   float64 `mapstructure:"first_target_r"`
-	FirstExitPct   float64 `mapstructure:"first_exit_pct"`
-	SecondTargetR  float64 `mapstructure:"second_target_r"`
-	SecondExitPct  float64 `mapstructure:"second_exit_pct"`
+	Enabled       bool    `mapstructure:"enabled"`
+	FirstTargetR  float64 `mapstructure:"first_target_r"`
+	FirstExitPct  float64 `mapstructure:"first_exit_pct"`
+	SecondTargetR float64 `mapstructure:"second_target_r"`
+	SecondExitPct float64 `mapstructure:"second_exit_pct"`
 }
 
 // StorageConfig holds data persistence configuration.
@@ -291,6 +295,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("sentiment.poll_interval_seconds", 60)
 	v.SetDefault("sentiment.sentiment_threshold_long", 0.3)
 	v.SetDefault("sentiment.sentiment_threshold_short", -0.3)
+	v.SetDefault("sentiment.enabled", false)
+	v.SetDefault("sentiment.schedule_times", []string{"08:00", "16:00"})
+	v.SetDefault("sentiment.use_database", true)
+	v.SetDefault("sentiment.database_path", "sentiment.db")
 
 	v.SetDefault("risk.max_risk_per_trade_pct", 1.0)
 	v.SetDefault("risk.max_daily_loss_pct", 3.0)
