@@ -9,7 +9,11 @@ from db import SentimentDB
 from fastapi import FastAPI, HTTPException
 from fetchers import (
     CoinGeckoFetcher,
+    CoinMarketCapFetcher,
     CryptopanicFetcher,
+    FinnhubFetcher,
+    FMPFetcher,
+    MarketauxFetcher,
     NewsAPIFetcher,
     Post,
     RedditFetcher,
@@ -33,6 +37,10 @@ fetchers = {
     "cryptopanic": CryptopanicFetcher(api_key=settings.cryptopanic_api_key),
     "twitter": TwitterFetcher(bearer_token=settings.twitter_bearer_token),
     "newsapi": NewsAPIFetcher(api_key=settings.newsapi_key),
+    "coinmarketcap": CoinMarketCapFetcher(api_key=settings.coinmarketcap_api_key),
+    "marketaux": MarketauxFetcher(api_key=settings.marketaux_api_key),
+    "finnhub": FinnhubFetcher(api_key=settings.finnhub_api_key),
+    "fmp": FMPFetcher(api_key=settings.fmp_api_key),
 }
 
 # Database

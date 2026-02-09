@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     coingecko_api_key: str = ""
     cryptopanic_api_key: str = ""
     newsapi_key: str = ""
+    
+    # New API keys
+    coinmarketcap_api_key: str = ""
+    marketaux_api_key: str = ""
+    finnhub_api_key: str = ""
+    fmp_api_key: str = ""
 
     redis_url: str = "redis://localhost:6379"
     use_redis: bool = False
