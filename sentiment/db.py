@@ -410,9 +410,9 @@ class SentimentDB:
                 "DELETE FROM sentiment_daily WHERE date < ?", (cutoff_daily,)
             )
 
-            # Keep mention history for 24 hours
+            # Keep mention history for 7 days (to support z-score calculation)
             cutoff_mentions = int(
-                (datetime.now(timezone.utc) - timedelta(hours=24)).timestamp()
+                (datetime.now(timezone.utc) - timedelta(days=7)).timestamp()
             )
             cursor.execute(
                 "DELETE FROM mention_history WHERE timestamp < ?", (cutoff_mentions,)

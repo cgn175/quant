@@ -80,3 +80,5 @@ temp/
 # Libraries
 
 lib/
+
+*.db

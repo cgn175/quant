@@ -335,6 +335,10 @@ async def compute_sentiment(symbol: str) -> dict:
     posts_24h = []
     weights_1h = []
     weights_24h = []
+    
+    # For true hourly persistence (this hour only)
+    posts_this_hour = []
+    weights_this_hour = []
 
     # Accumulate per-source metrics
     source_scores = defaultdict(lambda: {"positive": 0, "negative": 0, "count": 0})
@@ -351,6 +355,9 @@ async def compute_sentiment(symbol: str) -> dict:
         if post.timestamp >= hour_ago:
             posts_1h.append(sent)
             weights_1h.append(weight)
+            # Also collect for this hour's true aggregate
+            posts_this_hour.append(sent)
+            weights_this_hour.append(weight)
 
         if post.timestamp >= day_ago:
             posts_24h.append(sent)
@@ -359,15 +366,20 @@ async def compute_sentiment(symbol: str) -> dict:
     score_1h = analyzer.compute_score(posts_1h, weights_1h) if posts_1h else 0.0
     score_24h = analyzer.compute_score(posts_24h, weights_24h) if posts_24h else 0.0
 
-    # Calculate aggregate sentiment
-    total_positive = sum(s["positive"] for s in sentiments)
-    total_negative = sum(s["negative"] for s in sentiments)
-    total_neutral = sum(s["neutral"] for s in sentiments)
-    total = len(sentiments)
-
-    score_positive = total_positive / total if total > 0 else 0
-    score_negative = total_negative / total if total > 0 else 0
-    score_neutral = total_neutral / total if total > 0 else 0
+    # Calculate hourly aggregate (for this specific hour)
+    if posts_this_hour:
+        hourly_positive = sum(s["positive"] * w for s, w in zip(posts_this_hour, weights_this_hour))
+        hourly_negative = sum(s["negative"] * w for s, w in zip(posts_this_hour, weights_this_hour))
+        hourly_neutral = sum(s["neutral"] * w for s, w in zip(posts_this_hour, weights_this_hour))
+        total_weight = sum(weights_this_hour)
+        
+        score_positive = hourly_positive / total_weight
+        score_negative = hourly_negative / total_weight
+        score_neutral = hourly_neutral / total_weight
+    else:
+        score_positive = 0.0
+        score_negative = 0.0
+        score_neutral = 0.0
 
     async with post_history_lock:
         for post, sent in zip(posts, sentiments):
@@ -379,17 +391,25 @@ async def compute_sentiment(symbol: str) -> dict:
         ]
 
     mentions = len(posts_24h)
-    mentions_zscore = compute_mentions_zscore(symbol, mentions)
-    velocity = compute_velocity(symbol)
+    
+    # Use DB-backed calculations for better historical context
+    mentions_zscore = await compute_mentions_zscore_from_db(symbol, mentions)
+    velocity = await compute_velocity_from_db(symbol)
+    
+    # True hourly mentions count (this hour only)
+    hourly_mentions = len(posts_this_hour)
+    
+    # Use hour-truncated timestamp for bucketing
+    hour_bucket = now.replace(minute=0, second=0, microsecond=0)
 
-    # Persist to database
+    # Persist to database with hour-specific data
     await sentiment_db.save_hourly_sentiment(
         symbol=symbol,
-        timestamp=now,
+        timestamp=hour_bucket,  # Hour-truncated timestamp
         score_positive=score_positive,
         score_negative=score_negative,
         score_neutral=score_neutral,
-        mentions_count=mentions,
+        mentions_count=hourly_mentions,  # This hour only
         sources=sources_used,
     )
 
@@ -406,11 +426,11 @@ async def compute_sentiment(symbol: str) -> dict:
             sources=sources_used,
         )
 
-    # Save mention history for trend analysis
+    # Save mention history for trend analysis (hourly count)
     await sentiment_db.save_mention_history(
         symbol=symbol,
-        timestamp=now,
-        count=mentions,
+        timestamp=hour_bucket,  # Hour-truncated timestamp
+        count=hourly_mentions,  # This hour only
     )
 
     return {
@@ -447,6 +467,33 @@ def compute_mentions_zscore(symbol: str, current_mentions: int) -> float:
     return (current_mentions - mean) / stdev
 
 
+async def compute_mentions_zscore_from_db(
+    symbol: str, current_mentions: int
+) -> float:
+    """Calculate z-score using 7-day DB history."""
+    try:
+        history = await sentiment_db.get_mention_history(symbol, hours=168)
+        
+        if len(history) < 10:
+            return 0.0
+        
+        counts = [count for _, count in history]
+        
+        if len(counts) < 2:
+            return 0.0
+        
+        mean = statistics.mean(counts)
+        stdev = statistics.stdev(counts)
+        
+        if stdev == 0:
+            return 0.0
+        
+        return (current_mentions - mean) / stdev
+    except Exception:
+        # Fallback to in-memory calculation
+        return compute_mentions_zscore(symbol, current_mentions)
+
+
 def compute_velocity(symbol: str) -> float:
     history = post_history.get(symbol, [])
     if len(history) < 5:
@@ -467,6 +514,46 @@ def compute_velocity(symbol: str) -> float:
     older_avg = sum(older) / len(older)
 
     return recent_avg - older_avg
+
+
+async def compute_velocity_from_db(symbol: str) -> float:
+    """Calculate velocity using 7-day DB history."""
+    try:
+        history = await sentiment_db.get_hourly_sentiment(symbol, hours=24)
+        
+        if len(history) < 10:
+            return 0.0
+        
+        # Calculate sentiment scores from DB rows
+        scores = [
+            (
+                datetime.fromisoformat(row["timestamp"]),
+                row.get("score_positive", 0) - row.get("score_negative", 0)
+            )
+            for row in history
+        ]
+        
+        if not scores:
+            return 0.0
+        
+        now = datetime.now(timezone.utc)
+        recent = [s for ts, s in scores if ts >= now - timedelta(hours=6)]
+        older = [
+            s 
+            for ts, s in scores 
+            if now - timedelta(hours=24) <= ts < now - timedelta(hours=6)
+        ]
+        
+        if not recent or not older:
+            return 0.0
+        
+        recent_avg = statistics.mean(recent)
+        older_avg = statistics.mean(older)
+        
+        return recent_avg - older_avg
+    except Exception:
+        # Fallback to in-memory calculation
+        return compute_velocity(symbol)
 
 
 @app.on_event("startup")
@@ -519,11 +606,12 @@ async def backfill_history_if_empty():
 
 
 async def backfill_symbol_history(symbol: str, cutoff: datetime):
-    """Backfill daily sentiment for a symbol using any available posts."""
+    """Backfill hourly and daily sentiment for a symbol using any available posts."""
     fetch_tasks = [fetcher.fetch(symbol, limit=200) for fetcher in fetchers.values()]
     all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
     posts = []
+    sources_used = set()
     for result in all_results:
         if isinstance(result, list) and result:
             posts.extend(result)
@@ -535,12 +623,46 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
     texts = [p.text for p in posts]
     sentiments = analyzer.analyze(texts)
 
+    # Collect sources
+    for post in posts:
+        if post.timestamp >= cutoff:
+            sources_used.add(post.source)
+
+    # Bucket by hour for hourly aggregates
+    hourly_buckets: dict[str, dict] = {}
     daily_buckets: dict[str, dict] = {}
+    
     for post, sent in zip(posts, sentiments):
         if post.timestamp < cutoff:
             continue
+        
+        # Hourly bucket
+        hour_bucket = post.timestamp.replace(minute=0, second=0, microsecond=0)
+        hour_key = hour_bucket.isoformat()
+        
+        hourly_bucket = hourly_buckets.setdefault(
+            hour_key,
+            {
+                "pos": 0.0,
+                "neg": 0.0,
+                "neu": 0.0,
+                "weight": 0.0,
+                "mentions": 0,
+                "sources": set(),
+                "timestamp": hour_bucket,
+            },
+        )
+        weight = max(1, post.score) if post.score > 0 else 1
+        hourly_bucket["pos"] += sent["positive"] * weight
+        hourly_bucket["neg"] += sent["negative"] * weight
+        hourly_bucket["neu"] += sent["neutral"] * weight
+        hourly_bucket["weight"] += weight
+        hourly_bucket["mentions"] += 1
+        hourly_bucket["sources"].add(post.source)
+        
+        # Daily bucket (for long-term storage)
         date_key = post.timestamp.date().isoformat()
-        bucket = daily_buckets.setdefault(
+        daily_bucket = daily_buckets.setdefault(
             date_key,
             {
                 "pos": 0.0,
@@ -551,14 +673,34 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
                 "sources": set(),
             },
         )
-        weight = max(1, post.score) if post.score > 0 else 1
-        bucket["pos"] += sent["positive"] * weight
-        bucket["neg"] += sent["negative"] * weight
-        bucket["neu"] += sent["neutral"] * weight
-        bucket["weight"] += weight
-        bucket["mentions"] += 1
-        bucket["sources"].add(post.source)
+        daily_bucket["pos"] += sent["positive"] * weight
+        daily_bucket["neg"] += sent["negative"] * weight
+        daily_bucket["neu"] += sent["neutral"] * weight
+        daily_bucket["weight"] += weight
+        daily_bucket["mentions"] += 1
+        daily_bucket["sources"].add(post.source)
 
+    # Save hourly aggregates
+    for hour_key, bucket in hourly_buckets.items():
+        total_weight = bucket["weight"] or 1.0
+        await sentiment_db.save_hourly_sentiment(
+            symbol=symbol,
+            timestamp=bucket["timestamp"],
+            score_positive=bucket["pos"] / total_weight,
+            score_negative=bucket["neg"] / total_weight,
+            score_neutral=bucket["neu"] / total_weight,
+            mentions_count=bucket["mentions"],
+            sources=sorted(bucket["sources"]),
+        )
+        
+        # Also save mention history
+        await sentiment_db.save_mention_history(
+            symbol=symbol,
+            timestamp=bucket["timestamp"],
+            count=bucket["mentions"],
+        )
+
+    # Save daily aggregates
     for date_key, bucket in daily_buckets.items():
         total_weight = bucket["weight"] or 1.0
         await sentiment_db.save_daily_sentiment(
