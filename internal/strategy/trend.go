@@ -646,7 +646,14 @@ func (ts *TrendStrategy) OnBar(
 			regimeFeatures = BuildRegimeFeatures(candles, fundingCache, symbol, idx)
 		}
 		mlStart := time.Now()
-		probSafe, err := ts.mlClient.PredictRegime(context.Background(), symbol, regimeFeatures)
+		// Use directional model if available for this symbol
+		var probSafe float64
+		var err error
+		if cfg.DirectionalRegimeEnabled && cfg.DirectionalRegimeSymbols[symbol] {
+			probSafe, err = ts.mlClient.PredictRegimeDirectional(context.Background(), symbol, direction, regimeFeatures)
+		} else {
+			probSafe, err = ts.mlClient.PredictRegime(context.Background(), symbol, regimeFeatures)
+		}
 		if ts.prom != nil {
 			ts.prom.MLFilterLatency.Observe(time.Since(mlStart).Seconds())
 		}

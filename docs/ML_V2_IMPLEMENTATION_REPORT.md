@@ -85,10 +85,8 @@ Signal Flow (OnBar):
 
 ## Remaining Work (Not Done This Session)
 
-1. **Wire directional regime into `OnBar()`** — The `PredictRegimeDirectional` Go client method and `/predict_regime_directional` server endpoint are ready, but `OnBar()` doesn't yet call them. Need to add logic: if `DirectionalRegimeSymbols[symbol]` is true, call directional instead of combined regime model. This is straightforward but was deferred to avoid conflicting edits.
+1. **Paper trade validation** — Monitor ensemble decisions for 2-3 months before hard-enabling, per the report's conservative recommendation.
 
-2. **Paper trade validation** — Monitor ensemble decisions for 2-3 months before hard-enabling, per the report's conservative recommendation.
+2. **Walk-forward retraining** — Run quarterly using `ml/regime/train_regime_walkforward.py` to check stability.
 
-3. **Walk-forward retraining** — Run quarterly using `ml/regime/train_regime_walkforward.py` to check stability.
-
-4. **BTC/BNB** — Fundamentally different approach needed; regime classification doesn't work well for these symbols.
+3. **BTC/BNB** — Fundamentally different approach needed; regime classification doesn't work well for these symbols.
