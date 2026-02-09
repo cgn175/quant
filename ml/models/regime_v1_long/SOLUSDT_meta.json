@@ -1,0 +1,47 @@
+{
+  "symbol": "SOLUSDT",
+  "direction": "LONG",
+  "feature_version": "regime_v1_long",
+  "feature_names": [
+    "volatility_20",
+    "volume_ratio_20",
+    "rsi_14",
+    "hour_sin",
+    "hour_cos",
+    "funding_24h_avg"
+  ],
+  "model_type": "RandomForestClassifier",
+  "model_params": {
+    "max_depth": 4,
+    "min_samples_leaf": 50,
+    "n_estimators": 200,
+    "class_weight": "balanced"
+  },
+  "training_window": {
+    "start": "2020-09-24",
+    "end": "2025-06-30"
+  },
+  "test_window": {
+    "start": "2025-07-09",
+    "end": "2026-01-28"
+  },
+  "metrics": {
+    "train_auc": 0.7713,
+    "test_auc": 0.8088,
+    "auc_gap": -0.0376,
+    "precision": 0.2308,
+    "recall": 1.0,
+    "f1": 0.375
+  },
+  "suggested_threshold": 0.5,
+  "cv_aucs": [
+    0.5,
+    0.6806,
+    0.6725,
+    0.6296,
+    0.583
+  ],
+  "n_train_entries": 568,
+  "n_test_entries": 74,
+  "trained_at": "2026-02-09T09:57:06.605289+00:00"
+}

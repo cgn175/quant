@@ -123,12 +123,22 @@ type MLFilterConfig struct {
 
 // RegimeFilterConfig holds Regime Classifier (Traffic Light) parameters.
 type RegimeFilterConfig struct {
-	Enabled       bool    `mapstructure:"enabled"`
-	URL           string  `mapstructure:"url"`
-	Threshold     float64 `mapstructure:"threshold"`      // min prob_safe to allow trade
-	TimeoutMs     int     `mapstructure:"timeout_ms"`
-	FailOpen      bool    `mapstructure:"fail_open"`
-	FallbackToADX bool    `mapstructure:"fallback_to_adx"`
+	Enabled            bool              `mapstructure:"enabled"`
+	URL                string            `mapstructure:"url"`
+	Threshold          float64           `mapstructure:"threshold"`           // min prob_safe to allow trade
+	TimeoutMs          int               `mapstructure:"timeout_ms"`
+	FailOpen           bool              `mapstructure:"fail_open"`
+	FallbackToADX      bool              `mapstructure:"fallback_to_adx"`
+	SymbolVersions     map[string]string `mapstructure:"symbol_versions"`     // per-symbol model version ("v1" or "v2")
+	Ensemble           EnsembleConfig    `mapstructure:"ensemble"`
+	DirectionalSymbols []string          `mapstructure:"directional_symbols"` // symbols using LONG/SHORT models
+}
+
+// EnsembleConfig holds regime+vol ensemble filter parameters.
+type EnsembleConfig struct {
+	Enabled    bool     `mapstructure:"enabled"`
+	MaxStopPct float64  `mapstructure:"max_stop_pct"` // max predicted stop % to allow entry
+	Symbols    []string `mapstructure:"symbols"`       // symbols to apply ensemble to
 }
 
 // DynamicStopConfig holds Volatility Predictor (Dynamic Stop-Loss) parameters.
@@ -337,6 +347,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.regime_filter.timeout_ms", 200)
 	v.SetDefault("strategy.regime_filter.fail_open", false)
 	v.SetDefault("strategy.regime_filter.fallback_to_adx", true)
+	v.SetDefault("strategy.regime_filter.ensemble.enabled", false)
+	v.SetDefault("strategy.regime_filter.ensemble.max_stop_pct", 0.025)
 	v.SetDefault("strategy.dynamic_stop.enabled", false)
 	v.SetDefault("strategy.dynamic_stop.url", "http://localhost:9001")
 	v.SetDefault("strategy.dynamic_stop.timeout_ms", 200)

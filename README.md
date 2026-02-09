@@ -1,102 +1,135 @@
 # Quant Bot 🤖📈
 
-A production-ready crypto scalping bot targeting major CEX pairs (BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT) with a 10-20% annual return target.
+A crypto **trend-following trading bot** targeting BTCUSDT, ETHUSDT, SOLUSDT, and BNBUSDT on Binance using 4H candles. It is currently configured for **paper trading**.
 
 ## Overview
 
-The system combines:
-- **Go trading engine** for low-latency execution
-- **XGBoost/ONNX model** for price direction prediction
-- **Sentiment analysis** (Twitter, Reddit, news) as a regime filter
-- **Risk management** with position sizing, leverage limits, and daily loss caps
+The system consists of:
+- **Go trading engine** for live/paper execution, strategy logic, risk management, and backtesting
+- **Python ML microservice** for:
+  - **Regime classification** (“Traffic Light”) — when it is safe to trade
+  - **Volatility prediction** — used to size dynamic stop-losses
+- **(Optional) Sentiment microservice** (FastAPI + FinBERT) for news/social sentiment
+
+Core strategy is **Plan D — Pure Trend Following**:
+- Donchian breakout + EMA(9/21) crossover + EMA(50) trend filter
+- Volume and “dead market” filters (Bollinger band squeeze, candle color, etc.)
+- Optional ML-based regime filter and dynamic stop-loss width
+- Strict risk management with ATR/dynamic stops, trailing exits, partial profit-taking, and daily loss caps
+
+### Runtime workflow (high level)
+
+- Ingest 4H candles from Binance (via REST/WS) and persist to SQLite.
+- On each new candle, build features and evaluate **Plan D** trend rules.
+- Optionally call the **ML server** for regime and volatility predictions.
+- Apply risk rules (position sizing, daily loss caps, max positions/correlation) and execute via paper or live engine.
+- Continuously update trailing stops, partial exits, metrics, and Telegram alerts.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         QUANT BOT                               │
 ├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐  │
-│  │ Exchange │───▶│ Features │───▶│  Model   │───▶│ Strategy │  │
-│  │   WS     │    │  Builder │    │ Predict  │    │  Signal  │  │
-│  └──────────┘    └──────────┘    └──────────┘    └──────────┘  │
-│       │                │                              │         │
-│       │          ┌─────┴─────┐                        ▼         │
-│       │          │ Sentiment │              ┌──────────────┐    │
-│       │          │  Service  │              │    Risk      │    │
-│       │          └───────────┘              │   Manager    │    │
-│       │                                     └──────────────┘    │
-│       │                                            │            │
-│       ▼                                            ▼            │
-│  ┌──────────┐                              ┌──────────────┐     │
-│  │  Data    │                              │  Execution   │     │
-│  │  Store   │                              │   Engine     │     │
-│  └──────────┘                              └──────────────┘     │
+│  ┌──────────┐    ┌──────────┐    ┌──────────────┐   ┌────────┐ │
+│  │ Exchange │───▶│ Features │───▶│  Plan D      │──▶│  Risk  │ │
+│  │  WS/REST │    │  Builder │    │  Strategy    │   │ Manager│ │
+│  └──────────┘    └──────────┘    └──────────────┘   └────────┘ │
+│       │                │             ▲   ▲               │      │
+│       │                │             │   │               ▼      │
+│       │          ┌─────┴─────┐  ┌────┴──────┐   ┌────────────┐  │
+│       │          │  ML Regime│  │ ML Vol    │   │ Execution  │  │
+│       │          │ /predict_ │  │ /predict_ │   │  Engine    │  │
+│       │          │  regime   │  │ volatility│   └────────────┘  │
+│       │          └───────────┘  └───────────┘          │        │
+│       ▼                                                ▼        │
+│  ┌──────────┐                                   ┌──────────────┐│
+│  │  Data    │                                   │ Metrics/     ││
+│  │  Store   │                                   │ Alerts       ││
+│  └──────────┘                                   └──────────────┘│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
 
-- **Multi-symbol trading** with parallel WebSocket streams (multiplexed)
-- **Real-time sentiment** from Twitter, Reddit, crypto news via FinBERT NLP
-- **XGBoost predictions** for UP/DOWN/NEUTRAL with configurable thresholds
-- **Risk controls**: per-trade limits, daily loss caps, total leverage limits
-- **Paper & live modes** with identical strategy logic
-- **Backtesting engine** with full metrics (Sharpe, drawdown, profit factor)
-- **Prometheus metrics** + **Telegram alerts**
+- **4H trend-following strategy** (“Plan D”) with Donchian breakout + EMA confirmations + volume/volatility filters
+- **Optional ML regime filter** (RandomForest “Traffic Light”) to avoid DANGER_ZONE conditions
+- **Optional dynamic stop-loss** based on predicted next-candle range
+- **Strict risk controls**: per-trade risk, daily loss cap, max open positions, sector correlation guard
+- **Paper & live modes** with the same strategy logic (default is paper)
+- **Backtesting engine** with detailed metrics (PnL, Sharpe, drawdown, R-multiples)
+- **Prometheus metrics** and **Telegram alerts** for monitoring
 
 ## Project Structure
 
-```
+```text
 quant/
-├── cmd/
-│   └── bot/                 # Main binary entry point
-├── internal/
-│   ├── alerts/              # Telegram notifications
-│   ├── backtest/            # Offline backtester + reporter
-│   ├── config/              # Config loading (viper)
-│   ├── data/                # OHLCV candle storage
-│   ├── exchange/            # Binance WebSocket client
-│   ├── execution/           # Order execution (paper/live)
-│   ├── features/            # TA indicators + feature builder
-│   ├── metrics/             # Prometheus metrics
-│   ├── model/               # ONNX model inference
-│   ├── risk/                # Position sizing + risk limits
-│   ├── sentiment/           # Sentiment service client
-│   └── strategy/            # Signal generation + filters
-├── models/                  # Trained ONNX models
-├── scripts/                 # Python training scripts
-├── sentiment/               # Python sentiment microservice
-│   ├── fetchers/            # Twitter, Reddit, news fetchers
-│   ├── models/              # FinBERT analyzer
-│   ├── main.py              # FastAPI application
-│   └── Dockerfile
-├── config.yaml              # Bot configuration
-├── docker-compose.yaml      # Full stack deployment
-└── Dockerfile.bot           # Go bot container
+├── cmd/                                # Go binary entry points
+│   ├── bot/                            # Main bot binary
+│   ├── backtest/                       # Standalone backtester
+│   ├── analyze_predictions/            # Prediction analysis tool
+│   └── test_model/                     # Model testing tool
+│
+├── internal/                           # Go core packages
+│   ├── config/                         # Config structs + viper loading
+│   ├── strategy/                       # Plan D trend logic, features, tests
+│   ├── mlfilter/                       # HTTP client for ML microservice
+│   ├── exchange/                       # Binance REST + WebSocket client
+│   ├── data/                           # SQLite candle store + funding cache
+│   ├── features/                       # TA indicators + feature builders
+│   ├── execution/                      # Paper/live execution engines
+│   ├── risk/                           # Position sizing + risk limits
+│   ├── backtest/                       # Offline backtester
+│   ├── metrics/                        # Prometheus metrics
+│   ├── alerts/                         # Telegram notifications
+│   ├── model/                          # Legacy XGBoost/ONNX inference (disabled)
+│   └── sentiment/                      # Legacy sentiment microservice client
+│
+├── ml/                                 # Python ML training & inference
+│   ├── server.py                       # HTTP server: /predict_regime, /predict_volatility
+│   ├── regime/                         # Regime classifier (Traffic Light)
+│   ├── volatility/                     # Volatility predictor (Dynamic Stop-Loss)
+│   └── models/                         # Saved model files
+│
+├── scripts/                            # Research & utility scripts (Python)
+├── sentiment/                          # Optional sentiment microservice (FastAPI + FinBERT)
+├── data/                               # Runtime data (SQLite candles, training DB)
+├── docs/                               # Design & analysis docs
+├── config.yaml                         # Active configuration
+├── docker-compose.yaml                 # Bot + ML server (+ sentiment) stack
+└── Dockerfile.bot                      # Go bot container
 ```
 
 ## Technology Stack
 
-### Go Bot
-| Component | Library |
-|-----------|---------|
-| WebSocket | `gorilla/websocket` |
-| Config | `spf13/viper` + `spf13/cobra` |
-| Logging | `rs/zerolog` |
-| ML Inference | `onnxruntime-go` |
-| Metrics | `prometheus/client_golang` |
-| Alerts | `go-telegram-bot-api` |
+### Go trading bot
 
-### Python Sentiment Service
+| Component  | Library                    |
+|-----------|----------------------------|
+| Config    | `spf13/viper`, `spf13/cobra` |
+| Logging   | `rs/zerolog`               |
+| Exchange  | Custom Binance client (REST + WS) |
+| Metrics   | `prometheus/client_golang` |
+| Alerts    | `go-telegram-bot-api`      |
+
+### Python ML microservice
+
+| Component | Library / Tool |
+|----------|-----------------|
+| API      | FastAPI / Uvicorn |
+| Models   | scikit-learn (RandomForest, Huber/Ridge, etc.) |
+| Data     | pandas, numpy   |
+
+### Sentiment service (optional)
+
 | Component | Library |
-|-----------|---------|
-| API | FastAPI |
-| NLP | Transformers (FinBERT) |
-| Twitter | tweepy |
-| Reddit | praw |
+|----------|---------|
+| API      | FastAPI |
+| NLP      | Transformers (FinBERT) |
+| Twitter  | tweepy |
+| Reddit   | praw |
 
 ## Quick Start
 
-### 1. Clone and Build
+### 1. Clone and build
 
 ```bash
 git clone https://github.com/yourusername/quant-bot.git
@@ -104,17 +137,14 @@ cd quant-bot
 
 # Build Go bot
 go build -o bin/bot ./cmd/bot
-
-# Install Python dependencies
-cd sentiment && pip install -r requirements.txt && cd ..
 ```
 
 ### 2. Configure
 
-Edit `config.yaml`:
+Edit `config.yaml` (key sections only shown here):
 
 ```yaml
-mode: paper  # or "live"
+mode: paper  # NEVER set to "live" unless you know what you're doing
 
 exchange:
   name: binance
@@ -125,133 +155,141 @@ exchange:
 symbols:
   - BTCUSDT
   - ETHUSDT
+  - SOLUSDT
+  - BNBUSDT
+
+strategy:
+  type: trend_following
+  regime_filter:
+    enabled: false     # true to use ML Traffic Light
+  dynamic_stop:
+    enabled: false     # true to use ML volatility-based stops
+  ml_filter:
+    enabled: false     # legacy directional model (keep disabled)
 
 risk:
   max_risk_per_trade_pct: 1.0
   max_daily_loss_pct: 3.0
-  max_open_positions: 3
-  max_leverage: 2.0
-
-model:
-  path: models/xgboost_model.onnx
-  threshold_up: 0.6
-  threshold_down: 0.6
-
-alerts:
-  telegram_bot_token: "your-bot-token"
-  telegram_chat_id: 123456789
+  max_open_positions: 4
 ```
 
-### 3. Run with Docker Compose
+### 3. Run the ML server (recommended)
 
 ```bash
-# Set environment variables
-export EXCHANGE_API_KEY="your-key"
-export EXCHANGE_API_SECRET="your-secret"
-export REDDIT_CLIENT_ID="your-reddit-id"
-export REDDIT_CLIENT_SECRET="your-reddit-secret"
+# From repo root
+python3 ml/server.py --models-dir ml/models
+```
 
-# Start all services
+### 4. Run the bot
+
+```bash
+# Paper trading on 4H candles
+./bin/bot -c config.yaml
+```
+
+### 5. (Optional) Docker Compose
+
+```bash
+# Start bot + ML server (+ optional sentiment)
 docker-compose up -d
 
-# View logs
+# View bot logs
 docker-compose logs -f bot
-```
-
-### 4. Run Locally (Development)
-
-```bash
-# Terminal 1: Start sentiment service
-cd sentiment
-uvicorn main:app --host 0.0.0.0 --port 8000
-
-# Terminal 2: Start bot
-./bin/bot --config config.yaml
 ```
 
 ## Trading Workflow
 
 ```mermaid
 flowchart LR
-    A[Market Data] --> B[Feature Builder]
-    B --> C{XGBoost Model}
-    C -->|P(UP) > 0.6| D[Long Signal]
-    C -->|P(DOWN) > 0.6| E[Short Signal]
-    D --> F{Sentiment Filter}
-    E --> F
-    F -->|Pass| G{Risk Check}
-    F -->|Fail| H[Skip Trade]
-    G -->|Pass| I[Execute Order]
-    G -->|Fail| H
-    I --> J[Monitor TP/SL]
+    A[4H Market Data] --> B[Feature Builder]
+    B --> C[Plan D Trend Rules]
+    C --> D{ML Regime Filter?}
+    D -->|Disabled or SAFE| E{ML Volatility?}
+    D -->|DANGER_ZONE| H[Skip Trade]
+    E -->|Disabled| F[ATR-based Stop/Size]
+    E -->|Enabled| G[Dynamic Stop/Size]
+    F --> I{Risk Check}
+    G --> I
+    I -->|Pass| J[Execute Order (paper/live)]
+    I -->|Fail| H
+    J --> K[Trailing Stop & Partials]
 ```
 
-### Signal Generation
-1. **Feature extraction**: EMAs, RSI, Bollinger Bands, MACD, volume ratios
-2. **Model prediction**: XGBoost outputs `[P(down), P(neutral), P(up)]`
-3. **Sentiment filter**: Skip shorts if sentiment > 0.6, reduce size 50% if extreme
-4. **Risk validation**: Check leverage, daily loss, open positions
+### Signal generation
 
-### Position Management
-- **Entry**: Market or limit orders based on config
-- **Exit**: Automatic stop-loss and take-profit triggers
-- **Sizing**: `size = (equity × risk%) / (price × stop_distance%)`
+1. **Feature extraction**: Donchian channels, EMA(9/21/50), ATR, RSI, Bollinger Bands, volume ratios, funding rates, time-of-day features, etc.
+2. **Plan D rules**: mechanical breakout + trend confirmation + volume/whipsaw defenses (no directional ML prediction).
+3. **Optional ML filters**:
+   - Regime classifier decides if conditions are SAFE_TO_TRADE.
+   - Volatility model predicts next-candle range to set dynamic stop width.
+4. **Risk validation**: per-trade risk, daily loss cap, max open positions, sector correlation checks.
+
+### Position management
+
+- **Entry**: Orders sized by risk, with initial ATR/dynamic stop and profit targets.
+- **Exit**: Chandelier-style trailing stops with partial exits at multiple R-multiples.
+- **Sizing**: `size = (equity × risk_pct) / (entry_price × stop_distance_pct)`.
 
 ## Monitoring
 
-### Prometheus Metrics (`:9090/metrics`)
-- `quant_equity` - Current account equity
-- `quant_daily_pnl` - Daily realized PnL
-- `quant_win_rate` - Rolling win rate
-- `quant_open_positions` - Number of open positions
-- `quant_model_inference_seconds` - Model latency histogram
+### Prometheus metrics
 
-### Telegram Alerts
-- Trade opened/closed with PnL
-- Daily summary
-- Daily loss limit breach
-- Sentiment regime changes
-- Bot start/stop events
+Examples (names may vary slightly):
+- `quant_equity` — current account equity
+- `quant_daily_pnl` — daily realized PnL
+- `quant_open_positions` — number of open positions
+- `quant_strategy_trades_total` — trades by symbol/direction
+
+### Telegram alerts
+
+- Bot start/stop
+- Trade opened/closed with PnL and R-multiple
+- Daily PnL summary and loss cap breaches
+- (Optional) regime changes and ML/server health
 
 ## Backtesting
 
 ```bash
-# Run backtest
-./bin/bot --mode backtest --config config.yaml
+# Go backtester
+go build -o backtest ./cmd/backtest
+./backtest -c config.yaml
 
-# Output includes:
-# - Summary: equity curve, Sharpe, max drawdown
-# - Trade log: entry/exit prices, PnL, reasons
-# - Monthly returns
-# - Per-symbol statistics
+# Python-side research backtest
+python3 scripts/backtest_trend.py
 ```
 
-## Configuration Reference
+Outputs typically include:
+- Equity curve, Sharpe ratio, max drawdown
+- Per-symbol stats and R-distribution
+- Regime and volatility behavior vs outcomes
 
-| Section | Key | Description | Default |
-|---------|-----|-------------|---------|
-| `mode` | - | `paper` or `live` | `paper` |
-| `exchange.testnet` | - | Use testnet APIs | `false` |
-| `symbols` | - | Trading pairs | `[BTCUSDT, ETHUSDT]` |
-| `bar_size` | - | Candle interval | `1m` |
-| `risk.max_risk_per_trade_pct` | - | Max risk per trade | `1.0` |
-| `risk.max_daily_loss_pct` | - | Daily loss limit | `3.0` |
-| `risk.max_leverage` | - | Total account leverage | `2.0` |
-| `model.threshold_up` | - | Min P(up) for long | `0.6` |
-| `sentiment.sentiment_threshold_long` | - | Min sentiment for longs | `0.3` |
+## Configuration Reference (selected)
+
+| Section                     | Key                          | Description                                   | Example |
+|----------------------------|------------------------------|-----------------------------------------------|---------|
+| `mode`                     | -                            | `paper` or `live`                             | `paper` |
+| `symbols`                  | -                            | Trading pairs                                 | `[BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT]` |
+| `strategy.type`            | -                            | Active strategy type                          | `trend_following` |
+| `strategy.regime_filter`   | `enabled`                    | Use ML Traffic Light filter                   | `false` |
+| `strategy.dynamic_stop`    | `enabled`                    | Use ML volatility-based stops                 | `false` |
+| `strategy.ml_filter`       | `enabled`                    | Legacy directional ML (keep `false`)          | `false` |
+| `risk.max_risk_per_trade_pct` | -                         | Max risk per trade (% of equity)             | `1.0` |
+| `risk.max_daily_loss_pct`  | -                            | Daily loss cap (% of equity)                  | `3.0` |
+| `risk.max_open_positions`  | -                            | Max simultaneous positions                     | `4` |
 
 ## Development
 
 ```bash
-# Run tests
+# Go: build & test
+go build ./...
 go test ./...
 
-# Build for production
-go build -ldflags="-s -w" -o bin/bot ./cmd/bot
+# Python ML: train models
+python3 ml/regime/train_regime.py
+python3 ml/volatility/train_volatility.py
 
-# Train new model
-python scripts/train_model.py --symbols BTCUSDT,ETHUSDT --days 180
-python scripts/export_model.py --format onnx
+# Start ML server
+python3 ml/server.py --models-dir ml/models
 ```
 
 ## Risk Disclaimer
@@ -260,4 +298,4 @@ python scripts/export_model.py --format onnx
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License — see `LICENSE` for details.

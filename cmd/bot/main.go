@@ -189,6 +189,33 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		trendCfg.RegimeFailOpen = cfg.Strategy.RegimeFilter.FailOpen
 		log.Info().Float64("threshold", cfg.Strategy.RegimeFilter.Threshold).Msg("Regime filter (Traffic Light) enabled")
 
+		// Per-symbol model versions (v1/v2)
+		trendCfg.RegimeSymbolVersions = cfg.Strategy.RegimeFilter.SymbolVersions
+		if len(trendCfg.RegimeSymbolVersions) > 0 {
+			log.Info().Interface("versions", trendCfg.RegimeSymbolVersions).Msg("Per-symbol regime model versions")
+		}
+
+		// Ensemble config (regime + vol)
+		if cfg.Strategy.RegimeFilter.Ensemble.Enabled {
+			trendCfg.EnsembleEnabled = true
+			trendCfg.EnsembleMaxStopPct = cfg.Strategy.RegimeFilter.Ensemble.MaxStopPct
+			trendCfg.EnsembleSymbols = make(map[string]bool)
+			for _, s := range cfg.Strategy.RegimeFilter.Ensemble.Symbols {
+				trendCfg.EnsembleSymbols[s] = true
+			}
+			log.Info().Float64("max_stop_pct", trendCfg.EnsembleMaxStopPct).Strs("symbols", cfg.Strategy.RegimeFilter.Ensemble.Symbols).Msg("Ensemble filter (regime+vol) enabled")
+		}
+
+		// Directional regime models (LONG-only / SHORT-only)
+		if len(cfg.Strategy.RegimeFilter.DirectionalSymbols) > 0 {
+			trendCfg.DirectionalRegimeEnabled = true
+			trendCfg.DirectionalRegimeSymbols = make(map[string]bool)
+			for _, s := range cfg.Strategy.RegimeFilter.DirectionalSymbols {
+				trendCfg.DirectionalRegimeSymbols[s] = true
+			}
+			log.Info().Strs("symbols", cfg.Strategy.RegimeFilter.DirectionalSymbols).Msg("Directional regime models enabled")
+		}
+
 		// Create ML client if not already created by ml_filter
 		if mlClient == nil {
 			mlClient = mlfilter.NewClient(mlfilter.Config{

@@ -151,7 +151,11 @@ class SklearnRegistry:
 # ---------------------------------------------------------------------------
 
 xgb_registry: XGBModelRegistry | None = None
-regime_registry: SklearnRegistry | None = None
+regime_v1_registry: SklearnRegistry | None = None
+regime_v2_registry: SklearnRegistry | None = None
+regime_long_registry: SklearnRegistry | None = None
+REGIME_VERSION_MAP: dict[str, str] = {}
+REGIME_DIRECTIONAL_SYMBOLS: set[str] = set()
 vol_registry: SklearnRegistry | None = None
 
 
@@ -204,8 +208,11 @@ class Handler(BaseHTTPRequestHandler):
                 "status": "ok",
                 "xgb_models": xgb_registry.symbols if xgb_registry else [],
                 "xgb_version": xgb_registry.version if xgb_registry else "none",
-                "regime_models": regime_registry.symbols if regime_registry else [],
-                "regime_version": regime_registry.version if regime_registry else "none",
+                "regime_v1_models": regime_v1_registry.symbols if regime_v1_registry else [],
+                "regime_v2_models": regime_v2_registry.symbols if regime_v2_registry else [],
+                "regime_long_models": regime_long_registry.symbols if regime_long_registry else [],
+                "regime_version_map": REGIME_VERSION_MAP,
+                "regime_directional_symbols": sorted(REGIME_DIRECTIONAL_SYMBOLS),
                 "vol_models": vol_registry.symbols if vol_registry else [],
                 "vol_version": vol_registry.version if vol_registry else "none",
             })
@@ -218,6 +225,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_predict_xgb()
         elif self.path == "/predict_regime":
             self._handle_predict_regime()
+        elif self.path == "/predict_regime_directional":
+            self._handle_predict_regime_directional()
         elif self.path == "/predict_volatility":
             self._handle_predict_volatility()
         else:
@@ -253,21 +262,31 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def _handle_predict_regime(self):
-        """Regime Classifier (Traffic Light)."""
-        if not regime_registry or not regime_registry.models:
-            self._send_json(503, {"error": "no regime models loaded"})
-            return
-
+        """Regime Classifier (Traffic Light) — per-symbol v1/v2 selection."""
         body = self._read_json()
         if body is None:
             return
 
-        symbol, features = self._extract_symbol_features(body, regime_registry.models)
-        if symbol is None:
+        symbol = body.get("symbol")
+        if not symbol:
+            self._send_json(400, {"error": "missing 'symbol' field"})
+            return
+
+        # Pick v1 or v2 based on version map
+        version = REGIME_VERSION_MAP.get(symbol, "v1")
+        registry = regime_v2_registry if version == "v2" else regime_v1_registry
+
+        if not registry or symbol not in registry.models:
+            self._send_json(404, {"error": f"no regime model for {symbol} (version={version})"})
+            return
+
+        features = body.get("features")
+        if not isinstance(features, dict):
+            self._send_json(400, {"error": "missing or invalid 'features' field"})
             return
 
         try:
-            prob_safe = regime_registry.predict_proba(symbol, features)
+            prob_safe = registry.predict_proba(symbol, features)
         except ValueError as e:
             self._send_json(400, {"error": str(e)})
             return
@@ -278,7 +297,55 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, {
             "symbol": symbol,
             "prob_safe": round(prob_safe, 6),
-            "model_version": regime_registry.version,
+            "model_version": f"regime_{version}",
+        })
+
+    def _handle_predict_regime_directional(self):
+        """Directional Regime Classifier (LONG-only / SHORT-only models)."""
+        body = self._read_json()
+        if body is None:
+            return
+
+        symbol = body.get("symbol")
+        if not symbol:
+            self._send_json(400, {"error": "missing 'symbol' field"})
+            return
+
+        direction = body.get("direction", "").upper()
+        if direction not in ("LONG", "SHORT"):
+            self._send_json(400, {"error": f"invalid direction: {direction!r}, must be LONG or SHORT"})
+            return
+
+        # Currently only LONG directional models are supported
+        if direction == "LONG":
+            registry = regime_long_registry
+        else:
+            self._send_json(404, {"error": f"no SHORT directional model available yet"})
+            return
+
+        if not registry or symbol not in registry.models:
+            self._send_json(404, {"error": f"no directional regime model for {symbol} ({direction})"})
+            return
+
+        features = body.get("features")
+        if not isinstance(features, dict):
+            self._send_json(400, {"error": "missing or invalid 'features' field"})
+            return
+
+        try:
+            prob_safe = registry.predict_proba(symbol, features)
+        except ValueError as e:
+            self._send_json(400, {"error": str(e)})
+            return
+        except Exception as e:
+            self._send_json(500, {"error": f"prediction failed: {e}"})
+            return
+
+        self._send_json(200, {
+            "symbol": symbol,
+            "direction": direction,
+            "prob_safe": round(prob_safe, 6),
+            "model_version": f"regime_v1_{direction.lower()}",
         })
 
     def _handle_predict_volatility(self):
@@ -324,20 +391,34 @@ def main():
 
     models_base = Path(args.models_dir)
 
-    global xgb_registry, regime_registry, vol_registry
+    global xgb_registry, regime_v1_registry, regime_v2_registry, regime_long_registry, vol_registry, REGIME_VERSION_MAP, REGIME_DIRECTIONAL_SYMBOLS
 
     # Load legacy XGBoost models (trend_v1)
     xgb_registry = XGBModelRegistry(str(models_base))
 
-    # Load regime models
-    regime_registry = SklearnRegistry(str(models_base / "regime_v1"), name="regime")
+    # Load regime models — per-symbol v1/v2 selection
+    regime_v1_registry = SklearnRegistry(str(models_base / "regime_v1"), name="regime_v1")
+    regime_v2_registry = SklearnRegistry(str(models_base / "regime_v2"), name="regime_v2")
+
+    # Load directional regime models (LONG-only)
+    regime_long_registry = SklearnRegistry(str(models_base / "regime_v1_long"), name="regime_v1_long")
+
+    # Per-symbol version map: ETH uses v2, others use v1 (per ML_V2 report)
+    REGIME_VERSION_MAP = {
+        "ETHUSDT": "v2",
+    }
+
+    # Symbols that have directional models
+    REGIME_DIRECTIONAL_SYMBOLS = set(regime_long_registry.symbols)
 
     # Load volatility models
     vol_registry = SklearnRegistry(str(models_base / "vol_v1"), name="vol")
 
     total_models = (
         len(xgb_registry.models)
-        + len(regime_registry.models)
+        + len(regime_v1_registry.models)
+        + len(regime_v2_registry.models)
+        + len(regime_long_registry.models)
         + len(vol_registry.models)
     )
 
@@ -347,9 +428,12 @@ def main():
     server = HTTPServer(("0.0.0.0", args.port), Handler)
     print(
         f"ML server listening on :{args.port}\n"
-        f"  XGB:    {xgb_registry.symbols} ({xgb_registry.version})\n"
-        f"  Regime: {regime_registry.symbols} ({regime_registry.version})\n"
-        f"  Vol:    {vol_registry.symbols} ({vol_registry.version})",
+        f"  XGB:        {xgb_registry.symbols} ({xgb_registry.version})\n"
+        f"  Regime v1:  {regime_v1_registry.symbols} ({regime_v1_registry.version})\n"
+        f"  Regime v2:  {regime_v2_registry.symbols} ({regime_v2_registry.version})\n"
+        f"  Regime LONG:{regime_long_registry.symbols} ({regime_long_registry.version})\n"
+        f"  Regime map: {REGIME_VERSION_MAP}\n"
+        f"  Vol:        {vol_registry.symbols} ({vol_registry.version})",
         file=sys.stderr,
     )
 

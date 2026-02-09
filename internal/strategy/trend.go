@@ -73,6 +73,18 @@ type TrendConfig struct {
 	RegimeFallbackToADX bool
 	RegimeFailOpen      bool
 
+	// Per-symbol regime model version ("v1" or "v2")
+	RegimeSymbolVersions map[string]string
+
+	// Ensemble (regime + vol) parameters
+	EnsembleEnabled    bool
+	EnsembleMaxStopPct float64
+	EnsembleSymbols    map[string]bool // set of symbols to apply ensemble to
+
+	// Directional regime models (LONG-only / SHORT-only)
+	DirectionalRegimeEnabled bool
+	DirectionalRegimeSymbols map[string]bool // symbols that use directional models
+
 	// Dynamic Stop-Loss (Volatility Reader) parameters
 	DynamicStopEnabled bool
 	DynamicStopK       float64 // multiplier for predicted range → stop %
@@ -626,7 +638,13 @@ func (ts *TrendStrategy) OnBar(
 	// 2a. Regime filter — Regime Classifier OR legacy ML OR legacy ADX
 	if cfg.RegimeFilterEnabled && ts.mlClient != nil && ts.mlClient.IsEnabled() {
 		// --- Regime Classifier (Traffic Light) ---
-		regimeFeatures := BuildRegimeFeatures(candles, fundingCache, symbol, idx)
+		// Pick v1 or v2 features based on per-symbol config
+		var regimeFeatures map[string]float64
+		if ver, ok := cfg.RegimeSymbolVersions[symbol]; ok && ver == "v2" {
+			regimeFeatures = BuildRegimeV2Features(candles, fundingCache, symbol, idx)
+		} else {
+			regimeFeatures = BuildRegimeFeatures(candles, fundingCache, symbol, idx)
+		}
 		mlStart := time.Now()
 		probSafe, err := ts.mlClient.PredictRegime(context.Background(), symbol, regimeFeatures)
 		if ts.prom != nil {
@@ -663,6 +681,25 @@ func (ts *TrendStrategy) OnBar(
 				return nil
 			}
 			log.Debug().Str("symbol", symbol).Float64("prob_safe", probSafe).Msg("Regime filter passed (SAFE_TO_TRADE)")
+
+			// Ensemble filter: require vol-predicted stop ≤ threshold
+			if cfg.EnsembleEnabled && cfg.EnsembleSymbols[symbol] && ts.mlClient != nil {
+				volFeatures := BuildVolatilityFeatures(candles, idx)
+				predRangePct, err := ts.mlClient.PredictVolatility(context.Background(), symbol, volFeatures)
+				if err != nil {
+					log.Warn().Err(err).Str("symbol", symbol).Msg("Ensemble vol prediction error, skipping ensemble check")
+				} else {
+					stopPct := cfg.DynamicStopK * predRangePct
+					if stopPct > cfg.EnsembleMaxStopPct {
+						log.Debug().Str("symbol", symbol).Float64("stop_pct", stopPct).Float64("max", cfg.EnsembleMaxStopPct).Msg("Ensemble filter blocked signal (vol too high)")
+						if ts.prom != nil {
+							ts.prom.MLFilterBlockedTotal.WithLabelValues(symbol).Inc()
+						}
+						return nil
+					}
+					log.Debug().Str("symbol", symbol).Float64("stop_pct", stopPct).Msg("Ensemble filter passed")
+				}
+			}
 		}
 	} else if ts.mlClient != nil && ts.mlClient.IsEnabled() {
 		mlFeatures := BuildMLFeatures(candles, fundingCache, symbol, idx, cfg)

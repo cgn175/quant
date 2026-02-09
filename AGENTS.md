@@ -4,9 +4,9 @@
 
 **Crypto trend-following trading bot** targeting BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT on Binance with 4H candles. Currently in **paper trading mode**.
 
-**Two services:**
+**Two primary services:**
 1. **Go Trading Bot** — live/paper execution, strategy, risk management, backtesting
-2. **Python ML Microservice** — model training & HTTP inference server (port 9001)
+2. **Python ML Microservice** — model training & HTTP inference server (port 9001) for regime and volatility predictions
 
 **Current Strategy: "Plan D" — Pure Trend Following** (mechanical rules, no directional ML prediction):
 - **Layer 1 — Entry signals:** Donchian breakout + EMA(9/21) crossover confirmation + EMA(50) trend + volume confirmation + whipsaw defense (candle color + BB dead market filter)
@@ -18,6 +18,14 @@
 - **Volatility Predictor (Dynamic Stop-Loss):** HuberRegressor/Ridge that predicts next-candle range %. Used to set dynamic stop-loss width instead of fixed ATR multiplier.
 
 See `docs/ML_MODEL_ANALYSIS.md` for the full v1 failure analysis.
+
+### Runtime Workflow (high level)
+
+- **Market data ingestion:** Binance WS/REST → 4H candles → SQLite + in-memory buffers.
+- **Feature & signal generation:** On each new candle, compute TA/features and evaluate Plan D trend rules (Donchian breakout + EMA confirmations + volume/whipsaw filters).
+- **Optional ML filters:** Call `ml/server.py` for `/predict_regime` and `/predict_volatility` to gate entries and size dynamic stops.
+- **Risk & execution:** Apply risk limits (per-trade risk, daily loss cap, max positions, correlation) and route orders via paper/live engines.
+- **Lifecycle management:** Update trailing stops and partial exits, emit Prometheus metrics, and send Telegram alerts.
 
 ---
 

@@ -32,6 +32,12 @@ type PredictRequest struct {
 	Features map[string]float64 `json:"features"`
 }
 
+type DirectionalPredictRequest struct {
+	Symbol    string             `json:"symbol"`
+	Direction string             `json:"direction"`
+	Features  map[string]float64 `json:"features"`
+}
+
 type PredictResponse struct {
 	Symbol       string  `json:"symbol"`
 	Prob         float64 `json:"prob"`
@@ -187,6 +193,65 @@ func (c *Client) PredictRegime(ctx context.Context, symbol string, features map[
 		Float64("prob_safe", result.ProbSafe).
 		Str("model_version", result.ModelVersion).
 		Msg("Regime prediction")
+
+	return result.ProbSafe, nil
+}
+
+// PredictRegimeDirectional calls the directional regime classifier endpoint.
+// Returns the probability that the current market regime is SAFE_TO_TRADE
+// for the specified direction (LONG or SHORT).
+func (c *Client) PredictRegimeDirectional(ctx context.Context, symbol, direction string, features map[string]float64) (float64, error) {
+	if c.cb.IsTripped() {
+		return 0, fmt.Errorf("circuit breaker tripped: ML service disabled")
+	}
+
+	timeout := time.Duration(c.cfg.TimeoutMs) * time.Millisecond
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	reqBody := DirectionalPredictRequest{
+		Symbol:    symbol,
+		Direction: direction,
+		Features:  features,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return 0, fmt.Errorf("marshal directional regime request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL+"/predict_regime_directional", bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("create directional regime request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("directional regime request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("directional regime returned status %d", resp.StatusCode)
+	}
+
+	var result RegimeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("decode directional regime response: %w", err)
+	}
+
+	c.cb.RecordSuccess()
+
+	log.Debug().
+		Str("symbol", symbol).
+		Str("direction", direction).
+		Float64("prob_safe", result.ProbSafe).
+		Str("model_version", result.ModelVersion).
+		Msg("Directional regime prediction")
 
 	return result.ProbSafe, nil
 }
