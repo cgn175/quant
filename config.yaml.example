@@ -48,6 +48,35 @@ strategy:
     second_target_r: 6.0
     second_exit_pct: 0.25
 
+  # Legacy v1 XGBoost ML filter — KEEP DISABLED (overfit)
+  ml_filter:
+    enabled: false
+    url: "http://localhost:9001"
+    threshold: 0.65
+    timeout_ms: 200
+    fail_open: false
+    fallback_to_adx: true
+
+  # Regime Classifier (Traffic Light) — SOL/ETH only have signal
+  # Paper trade for 2-3 months before enabling
+  regime_filter:
+    enabled: false
+    url: "http://localhost:9001"
+    threshold: 0.50
+    timeout_ms: 200
+    fail_open: false
+    fallback_to_adx: true
+
+  # Dynamic Stop-Loss (Volatility Predictor) — production-ready for all symbols
+  dynamic_stop:
+    enabled: true
+    url: "http://localhost:9001"
+    timeout_ms: 200
+    fail_open: true       # fallback to ATR if ML server fails
+    k: 1.2                # slight overestimate → safer stops
+    min_stop_pct: 0.01    # 1% floor
+    max_stop_pct: 0.04    # 4% ceiling
+
 risk:
   max_risk_per_trade_pct: 1.0
   max_daily_loss_pct: 3.0

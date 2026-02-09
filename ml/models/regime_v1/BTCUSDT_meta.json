@@ -1,0 +1,46 @@
+{
+  "symbol": "BTCUSDT",
+  "feature_version": "regime_v1",
+  "feature_names": [
+    "volatility_20",
+    "volume_ratio_20",
+    "rsi_14",
+    "hour_sin",
+    "hour_cos",
+    "funding_24h_avg"
+  ],
+  "model_type": "RandomForestClassifier",
+  "model_params": {
+    "max_depth": 4,
+    "min_samples_leaf": 50,
+    "n_estimators": 200,
+    "class_weight": "balanced"
+  },
+  "training_window": {
+    "start": "2020-02-15",
+    "end": "2025-06-29"
+  },
+  "test_window": {
+    "start": "2025-07-01",
+    "end": "2026-02-05"
+  },
+  "metrics": {
+    "train_auc": 0.7368,
+    "test_auc": 0.4573,
+    "auc_gap": 0.2795,
+    "precision": 0.131,
+    "recall": 0.55,
+    "f1": 0.2115
+  },
+  "suggested_threshold": 0.35,
+  "cv_aucs": [
+    0.5385,
+    0.4851,
+    0.6008,
+    0.6466,
+    0.5895
+  ],
+  "n_train_entries": 1029,
+  "n_test_entries": 137,
+  "trained_at": "2026-02-09T02:04:36.823173+00:00"
+}

@@ -1,0 +1,47 @@
+{
+  "symbol": "ETHUSDT",
+  "feature_version": "vol_v1",
+  "feature_names": [
+    "range_1",
+    "range_sma_6",
+    "atrp_14",
+    "volume_ratio_20",
+    "hour_sin",
+    "hour_cos"
+  ],
+  "model_type": "huber",
+  "log_transform": true,
+  "log_eps": 1e-08,
+  "training_window": {
+    "start": "2020-02-13",
+    "end": "2025-06-30"
+  },
+  "test_window": {
+    "start": "2025-07-01",
+    "end": "2026-02-08"
+  },
+  "metrics": {
+    "train_mae": 0.011097,
+    "test_mae": 0.008008,
+    "test_rmse": 0.013266,
+    "test_r2": 0.1759,
+    "test_med_ae": 0.005264
+  },
+  "all_model_metrics": {
+    "huber": {
+      "train_mae": 0.011097,
+      "test_mae": 0.008008,
+      "test_rmse": 0.013266,
+      "test_r2": 0.1759,
+      "test_med_ae": 0.005264
+    },
+    "ridge": {
+      "train_mae": 0.010262,
+      "test_mae": 0.00808,
+      "test_rmse": 0.013461,
+      "test_r2": 0.1515,
+      "test_med_ae": 0.005583
+    }
+  },
+  "trained_at": "2026-02-09T02:03:55.439607+00:00"
+}

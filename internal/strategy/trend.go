@@ -66,6 +66,18 @@ type TrendConfig struct {
 	MLThreshold     float64
 	FallbackToADX   bool
 	FailOpen        bool
+
+	// Regime Classifier (Traffic Light) parameters
+	RegimeFilterEnabled bool
+	RegimeThreshold     float64
+	RegimeFallbackToADX bool
+	RegimeFailOpen      bool
+
+	// Dynamic Stop-Loss (Volatility Reader) parameters
+	DynamicStopEnabled bool
+	DynamicStopK       float64 // multiplier for predicted range → stop %
+	DynamicStopMinPct  float64 // floor (e.g., 0.01 = 1%)
+	DynamicStopMaxPct  float64 // ceiling (e.g., 0.04 = 4%)
 }
 
 // SectorMap classifies trading symbols by sector for correlation management (Patch 3).
@@ -611,8 +623,48 @@ func (ts *TrendStrategy) OnBar(
 	// Layer 2: Regime filters
 	// ---------------------------------------------------------------
 
-	// 2a. Regime filter — ML probability gate OR legacy ADX
-	if ts.mlClient != nil && ts.mlClient.IsEnabled() {
+	// 2a. Regime filter — Regime Classifier OR legacy ML OR legacy ADX
+	if cfg.RegimeFilterEnabled && ts.mlClient != nil && ts.mlClient.IsEnabled() {
+		// --- Regime Classifier (Traffic Light) ---
+		regimeFeatures := BuildRegimeFeatures(candles, fundingCache, symbol, idx)
+		mlStart := time.Now()
+		probSafe, err := ts.mlClient.PredictRegime(context.Background(), symbol, regimeFeatures)
+		if ts.prom != nil {
+			ts.prom.MLFilterLatency.Observe(time.Since(mlStart).Seconds())
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("symbol", symbol).Msg("Regime filter error")
+			if ts.prom != nil {
+				ts.prom.MLFilterErrorsTotal.Inc()
+			}
+			if cfg.RegimeFallbackToADX {
+				if ts.prom != nil {
+					ts.prom.MLFilterFallbackTotal.Inc()
+				}
+				adxVals := features.ADX(candles, cfg.ADXPeriod)
+				if adxVals == nil || adxVals[idx] < cfg.ADXThreshold {
+					if ts.prom != nil {
+						ts.prom.ADXFilterBlockedTotal.WithLabelValues(symbol).Inc()
+					}
+					return nil
+				}
+			} else if !cfg.RegimeFailOpen {
+				return nil
+			}
+		} else {
+			if ts.prom != nil {
+				ts.prom.MLFilterProb.WithLabelValues(symbol).Set(probSafe)
+			}
+			if probSafe < cfg.RegimeThreshold {
+				log.Debug().Str("symbol", symbol).Float64("prob_safe", probSafe).Float64("threshold", cfg.RegimeThreshold).Msg("Regime filter blocked signal (DANGER_ZONE)")
+				if ts.prom != nil {
+					ts.prom.MLFilterBlockedTotal.WithLabelValues(symbol).Inc()
+				}
+				return nil
+			}
+			log.Debug().Str("symbol", symbol).Float64("prob_safe", probSafe).Msg("Regime filter passed (SAFE_TO_TRADE)")
+		}
+	} else if ts.mlClient != nil && ts.mlClient.IsEnabled() {
 		mlFeatures := BuildMLFeatures(candles, fundingCache, symbol, idx, cfg)
 		mlStart := time.Now()
 		prob, err := ts.mlClient.Predict(context.Background(), symbol, mlFeatures)
@@ -694,6 +746,33 @@ func (ts *TrendStrategy) OnBar(
 	// ---------------------------------------------------------------
 	atrVal := atrFast[idx]
 	stopDistance := cfg.ATRStopMult * atrVal
+
+	// 2d. Dynamic Stop-Loss — use ML volatility prediction if enabled
+	if cfg.DynamicStopEnabled && ts.mlClient != nil && ts.mlClient.IsEnabled() {
+		volFeatures := BuildVolatilityFeatures(candles, idx)
+		predRangePct, err := ts.mlClient.PredictVolatility(context.Background(), symbol, volFeatures)
+		if err != nil {
+			log.Warn().Err(err).Str("symbol", symbol).Msg("Dynamic stop prediction error, falling back to ATR")
+			// fallback: use ATR-based stop (already computed above)
+		} else {
+			// Compute dynamic stop: stop_pct = clamp(k * predicted_range, min, max)
+			stopPct := cfg.DynamicStopK * predRangePct
+			if stopPct < cfg.DynamicStopMinPct {
+				stopPct = cfg.DynamicStopMinPct
+			}
+			if stopPct > cfg.DynamicStopMaxPct {
+				stopPct = cfg.DynamicStopMaxPct
+			}
+			stopDistance = last.Close * stopPct
+			log.Debug().
+				Str("symbol", symbol).
+				Float64("pred_range_pct", predRangePct).
+				Float64("stop_pct", stopPct).
+				Float64("stop_distance", stopDistance).
+				Float64("atr_stop_distance", cfg.ATRStopMult*atrVal).
+				Msg("Dynamic stop-loss applied")
+		}
+	}
 
 	var sigType SignalType
 	var stopLoss float64

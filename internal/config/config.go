@@ -106,6 +106,8 @@ type StrategyConfig struct {
 	ChandelierLookback int             `mapstructure:"chandelier_lookback"`
 	MaxPositionsPerSector int          `mapstructure:"max_positions_per_sector"` // Patch 3: Correlation Guard
 	MLFilter       MLFilterConfig       `mapstructure:"ml_filter"`
+	RegimeFilter   RegimeFilterConfig   `mapstructure:"regime_filter"`
+	DynamicStop    DynamicStopConfig    `mapstructure:"dynamic_stop"`
 	Variant        string               `mapstructure:"variant"`
 }
 
@@ -117,6 +119,27 @@ type MLFilterConfig struct {
 	TimeoutMs     int     `mapstructure:"timeout_ms"`
 	FailOpen      bool    `mapstructure:"fail_open"`
 	FallbackToADX bool    `mapstructure:"fallback_to_adx"`
+}
+
+// RegimeFilterConfig holds Regime Classifier (Traffic Light) parameters.
+type RegimeFilterConfig struct {
+	Enabled       bool    `mapstructure:"enabled"`
+	URL           string  `mapstructure:"url"`
+	Threshold     float64 `mapstructure:"threshold"`      // min prob_safe to allow trade
+	TimeoutMs     int     `mapstructure:"timeout_ms"`
+	FailOpen      bool    `mapstructure:"fail_open"`
+	FallbackToADX bool    `mapstructure:"fallback_to_adx"`
+}
+
+// DynamicStopConfig holds Volatility Predictor (Dynamic Stop-Loss) parameters.
+type DynamicStopConfig struct {
+	Enabled    bool    `mapstructure:"enabled"`
+	URL        string  `mapstructure:"url"`
+	TimeoutMs  int     `mapstructure:"timeout_ms"`
+	FailOpen   bool    `mapstructure:"fail_open"`
+	K          float64 `mapstructure:"k"`              // multiplier for predicted range → stop %
+	MinStopPct float64 `mapstructure:"min_stop_pct"`   // floor (e.g., 0.01 = 1%)
+	MaxStopPct float64 `mapstructure:"max_stop_pct"`   // ceiling (e.g., 0.04 = 4%)
 }
 
 // FundingFilterConfig holds funding rate filter parameters.
@@ -308,6 +331,19 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.ml_filter.timeout_ms", 200)
 	v.SetDefault("strategy.ml_filter.fail_open", false)
 	v.SetDefault("strategy.ml_filter.fallback_to_adx", true)
+	v.SetDefault("strategy.regime_filter.enabled", false)
+	v.SetDefault("strategy.regime_filter.url", "http://localhost:9001")
+	v.SetDefault("strategy.regime_filter.threshold", 0.55)
+	v.SetDefault("strategy.regime_filter.timeout_ms", 200)
+	v.SetDefault("strategy.regime_filter.fail_open", false)
+	v.SetDefault("strategy.regime_filter.fallback_to_adx", true)
+	v.SetDefault("strategy.dynamic_stop.enabled", false)
+	v.SetDefault("strategy.dynamic_stop.url", "http://localhost:9001")
+	v.SetDefault("strategy.dynamic_stop.timeout_ms", 200)
+	v.SetDefault("strategy.dynamic_stop.fail_open", true)
+	v.SetDefault("strategy.dynamic_stop.k", 1.0)
+	v.SetDefault("strategy.dynamic_stop.min_stop_pct", 0.01)
+	v.SetDefault("strategy.dynamic_stop.max_stop_pct", 0.04)
 	v.SetDefault("strategy.variant", "")
 
 	// Storage defaults

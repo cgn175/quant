@@ -1,16 +1,257 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+## Project Overview
 
-## Quick Reference
+**Crypto trend-following trading bot** targeting BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT on Binance with 4H candles. Currently in **paper trading mode**.
+
+**Two services:**
+1. **Go Trading Bot** — live/paper execution, strategy, risk management, backtesting
+2. **Python ML Microservice** — model training & HTTP inference server (port 9001)
+
+**Current Strategy: "Plan D" — Pure Trend Following** (mechanical rules, no directional ML prediction):
+- **Layer 1 — Entry signals:** Donchian breakout + EMA(9/21) crossover confirmation + EMA(50) trend + volume confirmation + whipsaw defense (candle color + BB dead market filter)
+- **Layer 2 — Regime filters:** Regime Classifier OR legacy ML OR ADX > 20, volatility (ATR ratio), funding rate filter
+- **Layer 3 — Risk management:** ATR-based initial stops (or Dynamic Stop-Loss), Chandelier trailing exit (dynamic ATR multiplier tightening by R-multiple), partial exits at 3R and 6R, daily loss cap, sector correlation guard
+
+**ML Status:** The v1 XGBoost directional model is **disabled** (severely overfit: Train AUC 0.96 vs Test AUC 0.57). Two new anti-overfit models have been built to replace it:
+- **Regime Classifier (Traffic Light):** RandomForest that learns WHEN to trade (SAFE_TO_TRADE vs DANGER_ZONE) based on entry outcomes. 6 features, max_depth=4. Replaces ADX > 20 rule.
+- **Volatility Predictor (Dynamic Stop-Loss):** HuberRegressor/Ridge that predicts next-candle range %. Used to set dynamic stop-loss width instead of fixed ATR multiplier.
+
+See `docs/ML_MODEL_ANALYSIS.md` for the full v1 failure analysis.
+
+---
+
+## Codebase Structure
+
+```
+quant/
+├── cmd/                                # Go binary entry points
+│   ├── bot/main.go                     # Main bot — config wiring, goroutine orchestration
+│   ├── backtest/                       # Standalone backtester binary
+│   ├── analyze_predictions/            # Prediction analysis tool
+│   └── test_model/                     # Model testing tool
+│
+├── internal/                           # Go core packages (not importable externally)
+│   ├── config/config.go                # Config structs + viper loading + validation
+│   ├── strategy/                       # ** THE BRAIN — all trading logic lives here **
+│   │   ├── trend.go                    # TrendStrategy: OnBar(), trailing stops, partials, position mgmt
+│   │   ├── trend_regime_features.go    # BuildRegimeFeatures() — 6 features for Traffic Light
+│   │   ├── trend_vol_features.go       # BuildVolatilityFeatures() — 6 features for Dynamic Stop
+│   │   ├── trend_ml_features.go        # BuildMLFeatures() — 19 features for legacy v1 (disabled)
+│   │   ├── signal.go                   # Signal types, legacy Evaluate() for old ML strategy
+│   │   └── trend_test.go              # Strategy unit tests
+│   ├── mlfilter/                       # ML inference HTTP client
+│   │   ├── client.go                   # Predict(), PredictRegime(), PredictVolatility()
+│   │   └── circuit_breaker.go          # Circuit breaker for ML service failures
+│   ├── exchange/                       # Binance REST + WebSocket client
+│   │   ├── binance.go                  # API calls: candles, orders, account, funding rates
+│   │   └── types.go                    # Candle, OrderResult, etc.
+│   ├── data/                           # Data persistence
+│   │   ├── store.go                    # CandleStore interface
+│   │   ├── sqlite_store.go             # SQLite implementation (candles.db)
+│   │   └── funding.go                  # FundingCache — in-memory funding rate cache
+│   ├── features/                       # Technical indicator calculations (Go)
+│   │   ├── indicators.go               # EMA, RSI, ATR, ADX, Bollinger, Donchian, VolumeRatio, etc.
+│   │   ├── builder.go                  # FeatureVector builder (5m)
+│   │   └── builder_4h.go              # FeatureVector4H builder
+│   ├── execution/                      # Order execution
+│   │   ├── engine.go                   # ExecutionEngine interface
+│   │   ├── paper.go                    # Paper trading engine (simulated fills)
+│   │   └── live.go                     # Live Binance execution
+│   ├── risk/manager.go                 # Position sizing, leverage limits
+│   ├── backtest/                       # Offline backtester
+│   │   ├── engine.go                   # Backtest loop
+│   │   ├── loader.go                   # Load historical data
+│   │   └── reporter.go                # PnL, Sharpe, drawdown metrics
+│   ├── metrics/prometheus.go           # All Prometheus metrics
+│   ├── alerts/telegram.go              # Telegram bot notifications
+│   ├── model/                          # Legacy XGBoost/ONNX inference (Go-side)
+│   └── sentiment/                      # Sentiment microservice client (legacy)
+│
+├── ml/                                 # Python ML training & inference
+│   ├── server.py                       # ** HTTP server: /predict, /predict_regime, /predict_volatility **
+│   ├── features.py                     # v1 feature engineering (19 features — legacy)
+│   ├── trainer.py                      # v1 XGBoost trainer (legacy, overfit)
+│   ├── analyze_models.py               # Deep model analysis script
+│   ├── regime/                         # Regime Classifier (Traffic Light)
+│   │   ├── features_regime_v1.py       # 6 features: volatility_20, volume_ratio_20, rsi_14, hour_sin/cos, funding_24h_avg
+│   │   ├── label_regime.py             # Entry labeling: "did this Donchian breakout reach +1R before -1R?"
+│   │   └── train_regime.py             # RandomForest(max_depth=4, min_samples_leaf=50)
+│   ├── volatility/                     # Volatility Predictor (Dynamic Stop-Loss)
+│   │   ├── features_vol_v1.py          # 6 features: range_1, range_sma_6, atrp_14, volume_ratio_20, hour_sin/cos
+│   │   └── train_volatility.py         # HuberRegressor / Ridge regression on log(next_range_pct)
+│   └── models/                         # Saved model files
+│       ├── *.json                      # v1 XGBoost models (per symbol)
+│       ├── regime_v1/*.pkl             # Regime classifier models (per symbol)
+│       └── vol_v1/*.pkl                # Volatility predictor models (per symbol)
+│
+├── scripts/                            # Research & utility scripts (Python)
+│   ├── fetch_data.py                   # Download historical data
+│   ├── ingest_4h_to_sqlite.py          # Ingest 4H candles → training.db
+│   ├── backtest_trend.py               # Python-side trend backtest
+│   ├── walk_forward_trend.py           # Walk-forward validation
+│   ├── train_model.py                  # Original training script
+│   └── ...                             # Various research notebooks/scripts
+│
+├── sentiment/                          # Python sentiment microservice (FastAPI + FinBERT)
+│   ├── main.py                         # FastAPI app
+│   ├── config.py
+│   ├── fetchers/                       # Twitter, Reddit, news fetchers
+│   └── models/                         # FinBERT model
+│
+├── data/                               # Runtime data (SQLite candles.db, training.db)
+├── docs/                               # Documentation
+│   ├── ML_MODEL_ANALYSIS.md            # ** v1 model failure analysis — READ THIS FIRST for ML work **
+│   ├── PLAN_D_IMPLEMENTATION.md        # Current strategy design doc
+│   └── ...
+│
+├── config.yaml                         # ** Active configuration — all tunables live here **
+├── config.yaml.example                 # Template
+├── docker-compose.yaml                 # Bot + ML server + sentiment
+├── Dockerfile.bot                      # Go bot container
+├── go.mod / go.sum                     # Go dependencies
+├── CLAUDE.md                           # Legacy Claude Code instructions (mostly outdated)
+└── AGENTS.md                           # THIS FILE — primary agent instructions
+```
+
+---
+
+## Key Data Flow
+
+```
+Binance WS → candles → SQLite → OnBar() → Layer 1 (entry signal?) → Layer 2 (regime OK?) → Layer 3 (stop/size) → Paper/Live execution → Telegram alert
+                                    │                                      │
+                                    │                              ML Server (Python)
+                                    │                              POST /predict_regime → prob_safe
+                                    │                              POST /predict_volatility → range_pct
+                                    └── if has position: UpdateTrailingStop() → CheckPartialExit()
+```
+
+---
+
+## Configuration Quick Reference (`config.yaml`)
+
+| Section | Key settings |
+|---------|-------------|
+| `strategy.type` | `trend_following` (active) |
+| `strategy.regime_filter.enabled` | `false` — set `true` to use Traffic Light |
+| `strategy.dynamic_stop.enabled` | `false` — set `true` to use ML dynamic stops |
+| `strategy.ml_filter.enabled` | `false` — legacy v1 XGBoost (keep disabled) |
+| `risk.max_risk_per_trade_pct` | `1.0` (1% per trade) |
+| `risk.max_daily_loss_pct` | `3.0` (3% daily cap) |
+| `risk.max_open_positions` | `4` |
+| `mode` | `paper` (never change to `live` without explicit instruction) |
+
+---
+
+## Development Commands
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
-bd sync               # Sync with git
+# Go
+go build ./...                                    # Build everything
+go test ./...                                     # Run all tests
+go test -v -run TestName ./internal/strategy      # Specific test
+go build -o bin/bot ./cmd/bot && ./bin/bot -c config.yaml  # Run bot
+
+# Python ML
+python3 ml/regime/train_regime.py                 # Train regime classifier
+python3 ml/volatility/train_volatility.py         # Train volatility predictor
+python3 ml/server.py --models-dir ml/models       # Start ML inference server
+python3 ml/analyze_models.py                      # Analyze v1 models (from ml/ dir)
+
+# Backtest
+go build -o backtest ./cmd/backtest && ./backtest -c config.yaml
+python3 scripts/backtest_trend.py                 # Python backtest
 ```
+
+---
+
+## Critical Rules
+
+### ⚠️ NEVER DO
+- **Never change `mode` to `live`** unless explicitly told by the user
+- **Never modify API keys or secrets**
+- **Never delete training data** (`data/training.db`, `data/candles.db`)
+- **Never enable `ml_filter`** (v1) — it is overfit and will lose money
+- **Never increase model complexity** without overfitting analysis (train vs test AUC gap < 0.08)
+
+### ✅ ALWAYS DO
+- **Run `go build ./...` and `go test ./...`** after any Go changes
+- **Check Python syntax** with `python3 -c "import ast; ast.parse(open('file.py').read())"` after Python changes
+- **Feature parity:** when adding/changing features, update BOTH Python (`ml/*/features_*.py`) AND Go (`internal/strategy/trend_*_features.go`) — feature names must match exactly
+- **Read `docs/ML_MODEL_ANALYSIS.md`** before any ML work — it explains why v1 failed
+
+---
+
+## How to Work: Break Features Into Issues
+
+**ALWAYS break any feature or task into smaller, independent issues using `bd` (beads).** This is mandatory, not optional.
+
+### Workflow
+
+1. **Analyze the feature** — understand scope, identify which files/layers are affected
+2. **Create issues** — break into the smallest units that can be implemented independently:
+   ```bash
+   bd create --title "Add X feature to Python trainer" --body "..."
+   bd create --title "Add X feature Go-side feature builder" --body "..."
+   bd create --title "Wire X feature in config.go" --body "..."
+   bd create --title "Add X feature integration in trend.go OnBar()" --body "..."
+   bd create --title "Add tests for X feature" --body "..."
+   ```
+3. **Work issues in parallel** when they don't touch the same files — use `Task` tool to run sub-agents concurrently
+4. **Claim → Do → Verify → Close** each issue:
+   ```bash
+   bd update <id> --status in_progress   # Claim
+   # ... do the work ...
+   go build ./... && go test ./...       # Verify
+   bd close <id>                         # Close
+   ```
+5. **Notify per Telegram after each issue** — use the `notifying-telegram` skill to send a short summary of what was done
+
+### Good issue breakdown example (adding a new ML model):
+
+| Issue | Can parallel? |
+|-------|:---:|
+| Python feature engineering + trainer | ✅ |
+| Go feature builder | ✅ |
+| Config struct + defaults | ✅ |
+| ML server endpoint | ✅ |
+| ML client method (Go) | after config |
+| Strategy integration (OnBar) | after all above |
+| Tests | after integration |
+| Documentation | ✅ |
+
+### Bad: one giant issue like "Add regime classifier end-to-end"
+
+---
+
+## Beads Quick Reference
+
+```bash
+bd onboard                                        # First-time setup
+bd ready                                          # Find available work
+bd show <id>                                      # View issue details
+bd create --title "..." --body "..."              # Create issue
+bd update <id> --status in_progress               # Claim work
+bd close <id>                                     # Complete work
+bd sync                                           # Sync with git
+```
+
+---
+
+## Telegram Notifications
+
+**After completing each issue**, notify the user via Telegram with a short summary. Load the `notifying-telegram` skill and send a message like:
+
+```
+✅ Issue #<id>: <title>
+<1-2 sentence summary of what was done>
+Files changed: <list>
+```
+
+This keeps the user informed without them having to check constantly.
+
+---
 
 ## Landing the Plane (Session Completion)
 
@@ -18,23 +259,22 @@ bd sync               # Sync with git
 
 **MANDATORY WORKFLOW:**
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+1. **File issues for remaining work** — create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) — `go build ./...`, `go test ./...`, Python syntax checks
+3. **Update issue status** — close finished work, update in-progress items
+4. **PUSH TO REMOTE** — this is MANDATORY:
    ```bash
    git pull --rebase
    bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+5. **Clean up** — clear stashes, prune remote branches
+6. **Verify** — all changes committed AND pushed
+7. **Hand off** — provide context for next session
 
 **CRITICAL RULES:**
 - Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
+- NEVER stop before pushing — that leaves work stranded locally
+- NEVER say "ready to push when you are" — YOU must push
 - If push fails, resolve and retry until it succeeds
-

@@ -1,0 +1,47 @@
+{
+  "symbol": "SOLUSDT",
+  "feature_version": "vol_v1",
+  "feature_names": [
+    "range_1",
+    "range_sma_6",
+    "atrp_14",
+    "volume_ratio_20",
+    "hour_sin",
+    "hour_cos"
+  ],
+  "model_type": "huber",
+  "log_transform": true,
+  "log_eps": 1e-08,
+  "training_window": {
+    "start": "2020-08-14",
+    "end": "2025-06-30"
+  },
+  "test_window": {
+    "start": "2025-07-01",
+    "end": "2026-02-08"
+  },
+  "metrics": {
+    "train_mae": 0.015355,
+    "test_mae": 0.009073,
+    "test_rmse": 0.013517,
+    "test_r2": 0.1937,
+    "test_med_ae": 0.007146
+  },
+  "all_model_metrics": {
+    "huber": {
+      "train_mae": 0.015355,
+      "test_mae": 0.009073,
+      "test_rmse": 0.013517,
+      "test_r2": 0.1937,
+      "test_med_ae": 0.007146
+    },
+    "ridge": {
+      "train_mae": 0.014685,
+      "test_mae": 0.009396,
+      "test_rmse": 0.01359,
+      "test_r2": 0.185,
+      "test_med_ae": 0.007744
+    }
+  },
+  "trained_at": "2026-02-09T02:03:55.529964+00:00"
+}

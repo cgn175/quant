@@ -38,6 +38,18 @@ type PredictResponse struct {
 	ModelVersion string  `json:"model_version"`
 }
 
+type RegimeResponse struct {
+	Symbol       string  `json:"symbol"`
+	ProbSafe     float64 `json:"prob_safe"`
+	ModelVersion string  `json:"model_version"`
+}
+
+type VolatilityResponse struct {
+	Symbol       string  `json:"symbol"`
+	PredRangePct float64 `json:"pred_range_pct"`
+	ModelVersion string  `json:"model_version"`
+}
+
 func NewClient(cfg Config) *Client {
 	if cfg.TimeoutMs <= 0 {
 		cfg.TimeoutMs = 200
@@ -121,4 +133,116 @@ func (c *Client) Predict(ctx context.Context, symbol string, features map[string
 		Msg("ML prediction")
 
 	return result.Prob, nil
+}
+
+// PredictRegime calls the regime classifier (Traffic Light) endpoint.
+// Returns the probability that the current market regime is SAFE_TO_TRADE.
+func (c *Client) PredictRegime(ctx context.Context, symbol string, features map[string]float64) (float64, error) {
+	if c.cb.IsTripped() {
+		return 0, fmt.Errorf("circuit breaker tripped: ML service disabled")
+	}
+
+	timeout := time.Duration(c.cfg.TimeoutMs) * time.Millisecond
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	reqBody := PredictRequest{
+		Symbol:   symbol,
+		Features: features,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return 0, fmt.Errorf("marshal regime request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL+"/predict_regime", bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("create regime request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("regime request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("regime returned status %d", resp.StatusCode)
+	}
+
+	var result RegimeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("decode regime response: %w", err)
+	}
+
+	c.cb.RecordSuccess()
+
+	log.Debug().
+		Str("symbol", symbol).
+		Float64("prob_safe", result.ProbSafe).
+		Str("model_version", result.ModelVersion).
+		Msg("Regime prediction")
+
+	return result.ProbSafe, nil
+}
+
+// PredictVolatility calls the volatility predictor (Dynamic Stop-Loss) endpoint.
+// Returns the predicted next-candle range as a percentage (e.g., 0.025 = 2.5%).
+func (c *Client) PredictVolatility(ctx context.Context, symbol string, features map[string]float64) (float64, error) {
+	if c.cb.IsTripped() {
+		return 0, fmt.Errorf("circuit breaker tripped: ML service disabled")
+	}
+
+	timeout := time.Duration(c.cfg.TimeoutMs) * time.Millisecond
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	reqBody := PredictRequest{
+		Symbol:   symbol,
+		Features: features,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return 0, fmt.Errorf("marshal volatility request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL+"/predict_volatility", bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("create volatility request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("volatility request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("volatility returned status %d", resp.StatusCode)
+	}
+
+	var result VolatilityResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		c.cb.RecordError()
+		return 0, fmt.Errorf("decode volatility response: %w", err)
+	}
+
+	c.cb.RecordSuccess()
+
+	log.Debug().
+		Str("symbol", symbol).
+		Float64("pred_range_pct", result.PredRangePct).
+		Str("model_version", result.ModelVersion).
+		Msg("Volatility prediction")
+
+	return result.PredRangePct, nil
 }

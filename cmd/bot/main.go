@@ -180,6 +180,45 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		trendCfg.FailOpen = cfg.Strategy.MLFilter.FailOpen
 		log.Info().Str("url", cfg.Strategy.MLFilter.URL).Float64("threshold", cfg.Strategy.MLFilter.Threshold).Msg("ML filter enabled")
 	}
+
+	// Wire Regime Classifier (Traffic Light) config
+	if cfg.Strategy.RegimeFilter.Enabled {
+		trendCfg.RegimeFilterEnabled = true
+		trendCfg.RegimeThreshold = cfg.Strategy.RegimeFilter.Threshold
+		trendCfg.RegimeFallbackToADX = cfg.Strategy.RegimeFilter.FallbackToADX
+		trendCfg.RegimeFailOpen = cfg.Strategy.RegimeFilter.FailOpen
+		log.Info().Float64("threshold", cfg.Strategy.RegimeFilter.Threshold).Msg("Regime filter (Traffic Light) enabled")
+
+		// Create ML client if not already created by ml_filter
+		if mlClient == nil {
+			mlClient = mlfilter.NewClient(mlfilter.Config{
+				Enabled:       true,
+				URL:           cfg.Strategy.RegimeFilter.URL,
+				TimeoutMs:     cfg.Strategy.RegimeFilter.TimeoutMs,
+				FailOpen:      cfg.Strategy.RegimeFilter.FailOpen,
+				FallbackToADX: cfg.Strategy.RegimeFilter.FallbackToADX,
+			})
+		}
+	}
+
+	// Wire Dynamic Stop-Loss (Volatility Reader) config
+	if cfg.Strategy.DynamicStop.Enabled {
+		trendCfg.DynamicStopEnabled = true
+		trendCfg.DynamicStopK = cfg.Strategy.DynamicStop.K
+		trendCfg.DynamicStopMinPct = cfg.Strategy.DynamicStop.MinStopPct
+		trendCfg.DynamicStopMaxPct = cfg.Strategy.DynamicStop.MaxStopPct
+		log.Info().Float64("k", cfg.Strategy.DynamicStop.K).Float64("min", cfg.Strategy.DynamicStop.MinStopPct).Float64("max", cfg.Strategy.DynamicStop.MaxStopPct).Msg("Dynamic stop-loss (Volatility Reader) enabled")
+
+		// Create ML client if not already created
+		if mlClient == nil {
+			mlClient = mlfilter.NewClient(mlfilter.Config{
+				Enabled:   true,
+				URL:       cfg.Strategy.DynamicStop.URL,
+				TimeoutMs: cfg.Strategy.DynamicStop.TimeoutMs,
+				FailOpen:  cfg.Strategy.DynamicStop.FailOpen,
+			})
+		}
+	}
 	var opts []strategy.TrendStrategyOption
 	if mlClient != nil {
 		opts = append(opts, strategy.WithMLClient(mlClient))

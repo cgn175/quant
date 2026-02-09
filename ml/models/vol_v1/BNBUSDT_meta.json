@@ -1,0 +1,47 @@
+{
+  "symbol": "BNBUSDT",
+  "feature_version": "vol_v1",
+  "feature_names": [
+    "range_1",
+    "range_sma_6",
+    "atrp_14",
+    "volume_ratio_20",
+    "hour_sin",
+    "hour_cos"
+  ],
+  "model_type": "huber",
+  "log_transform": true,
+  "log_eps": 1e-08,
+  "training_window": {
+    "start": "2020-02-13",
+    "end": "2025-06-30"
+  },
+  "test_window": {
+    "start": "2025-07-01",
+    "end": "2026-02-08"
+  },
+  "metrics": {
+    "train_mae": 0.013376,
+    "test_mae": 0.006829,
+    "test_rmse": 0.013766,
+    "test_r2": 0.0808,
+    "test_med_ae": 0.004533
+  },
+  "all_model_metrics": {
+    "huber": {
+      "train_mae": 0.013376,
+      "test_mae": 0.006829,
+      "test_rmse": 0.013766,
+      "test_r2": 0.0808,
+      "test_med_ae": 0.004533
+    },
+    "ridge": {
+      "train_mae": 0.010848,
+      "test_mae": 0.006982,
+      "test_rmse": 0.015066,
+      "test_r2": -0.101,
+      "test_med_ae": 0.004905
+    }
+  },
+  "trained_at": "2026-02-09T02:03:55.642264+00:00"
+}
