@@ -1,0 +1,25 @@
+{
+  "symbol": "BTCUSDT",
+  "feature_version": "regime_v1",
+  "feature_names": [
+    "volatility_20",
+    "volume_ratio_20",
+    "rsi_14",
+    "hour_sin",
+    "hour_cos",
+    "funding_24h_avg"
+  ],
+  "model_type": "RandomForestClassifier",
+  "labeling": "1h_intrabar",
+  "metrics": {
+    "train_auc": 0.7368,
+    "test_auc": 0.4573,
+    "auc_gap": 0.2795,
+    "precision": 0.131,
+    "recall": 0.55,
+    "f1": 0.2115
+  },
+  "n_train_entries": 1029,
+  "n_test_entries": 137,
+  "trained_at": "2026-02-09T02:35:11.789712+00:00"
+}

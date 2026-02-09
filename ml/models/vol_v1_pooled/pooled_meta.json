@@ -1,0 +1,65 @@
+{
+  "model_type": "pooled_huber",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT"
+  ],
+  "feature_version": "vol_v1",
+  "feature_names": [
+    "range_1",
+    "range_sma_6",
+    "atrp_14",
+    "volume_ratio_20",
+    "hour_sin",
+    "hour_cos",
+    "is_BTCUSDT",
+    "is_ETHUSDT",
+    "is_SOLUSDT",
+    "is_BNBUSDT"
+  ],
+  "pooled_feature_names": [
+    "range_1",
+    "range_sma_6",
+    "atrp_14",
+    "volume_ratio_20",
+    "hour_sin",
+    "hour_cos"
+  ],
+  "symbol_features": [
+    "is_BTCUSDT",
+    "is_ETHUSDT",
+    "is_SOLUSDT",
+    "is_BNBUSDT"
+  ],
+  "log_transform": true,
+  "log_eps": 1e-08,
+  "target_source": "1h_intrabar",
+  "metrics": {
+    "train_mae": 0.013255,
+    "test_mae": 0.007247,
+    "test_r2": 0.2544
+  },
+  "per_symbol_metrics": {
+    "BTCUSDT": {
+      "test_mae": 0.005397,
+      "test_r2": 0.2435
+    },
+    "ETHUSDT": {
+      "test_mae": 0.00804,
+      "test_r2": 0.17
+    },
+    "SOLUSDT": {
+      "test_mae": 0.008793,
+      "test_r2": 0.1559
+    },
+    "BNBUSDT": {
+      "test_mae": 0.006757,
+      "test_r2": 0.1972
+    }
+  },
+  "n_train": 46038,
+  "n_test": 5336,
+  "trained_at": "2026-02-09T02:35:31.363829+00:00"
+}

@@ -1,0 +1,57 @@
+{
+  "model_type": "pooled",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT"
+  ],
+  "feature_version": "regime_v1",
+  "feature_names": [
+    "volatility_20",
+    "volume_ratio_20",
+    "rsi_14",
+    "hour_sin",
+    "hour_cos",
+    "funding_24h_avg",
+    "is_BTCUSDT",
+    "is_ETHUSDT",
+    "is_SOLUSDT",
+    "is_BNBUSDT"
+  ],
+  "pooled_feature_names": [
+    "volatility_20",
+    "volume_ratio_20",
+    "rsi_14",
+    "hour_sin",
+    "hour_cos",
+    "funding_24h_avg"
+  ],
+  "symbol_features": [
+    "is_BTCUSDT",
+    "is_ETHUSDT",
+    "is_SOLUSDT",
+    "is_BNBUSDT"
+  ],
+  "model_params": {
+    "max_depth": 4,
+    "min_samples_leaf": 50,
+    "n_estimators": 200,
+    "class_weight": "balanced"
+  },
+  "labeling": "1h_intrabar",
+  "metrics": {
+    "train_auc": 0.7021,
+    "test_auc": 0.5728,
+    "auc_gap": 0.1293
+  },
+  "per_symbol_test_auc": {
+    "BTCUSDT": 0.438,
+    "ETHUSDT": 0.6261,
+    "SOLUSDT": 0.7075,
+    "BNBUSDT": 0.5272
+  },
+  "n_train_entries": 4232,
+  "n_test_entries": 542,
+  "trained_at": "2026-02-09T02:35:14.285064+00:00"
+}

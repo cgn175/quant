@@ -1,0 +1,25 @@
+{
+  "symbol": "SOLUSDT",
+  "feature_version": "regime_v1",
+  "feature_names": [
+    "volatility_20",
+    "volume_ratio_20",
+    "rsi_14",
+    "hour_sin",
+    "hour_cos",
+    "funding_24h_avg"
+  ],
+  "model_type": "RandomForestClassifier",
+  "labeling": "1h_intrabar",
+  "metrics": {
+    "train_auc": 0.7553,
+    "test_auc": 0.7567,
+    "auc_gap": -0.0014,
+    "precision": 0.2143,
+    "recall": 0.9375,
+    "f1": 0.3488
+  },
+  "n_train_entries": 1029,
+  "n_test_entries": 138,
+  "trained_at": "2026-02-09T02:35:13.274952+00:00"
+}
