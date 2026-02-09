@@ -94,6 +94,7 @@ quant/
 │       └── vol_v1/*.pkl                # Volatility predictor models (per symbol)
 │
 ├── scripts/                            # Research & utility scripts (Python)
+│   ├── retrain_pipeline.py             # ** Automated ML lifecycle orchestrator (cron) **
 │   ├── fetch_data.py                   # Download historical data
 │   ├── ingest_4h_to_sqlite.py          # Ingest 4H candles → training.db
 │   ├── backtest_trend.py               # Python-side trend backtest
@@ -166,6 +167,11 @@ python3 ml/regime/train_regime.py                 # Train regime classifier
 python3 ml/volatility/train_volatility.py         # Train volatility predictor
 python3 ml/server.py --models-dir ml/models       # Start ML inference server
 python3 ml/analyze_models.py                      # Analyze v1 models (from ml/ dir)
+
+# Automated Retraining
+python3 scripts/retrain_pipeline.py fetch         # Incremental data fetch
+python3 scripts/retrain_pipeline.py run           # Full retraining cycle (cron)
+python3 scripts/retrain_pipeline.py evaluate --run-id <id>  # Check specific run
 
 # Backtest
 go build -o backtest ./cmd/backtest && ./backtest -c config.yaml

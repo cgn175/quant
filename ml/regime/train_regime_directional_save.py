@@ -52,11 +52,17 @@ except ImportError:
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "training.db"
 MODELS_BASE = Path(__file__).resolve().parent.parent / "models"
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
-TRAIN_CUTOFF = pd.Timestamp("2025-07-01", tz="UTC")
 
 # Minimum samples required for training/testing
 MIN_TRAIN = 30
 MIN_TEST = 10
+
+# Rolling window train/test split (last 7 months as test)
+def get_train_cutoff():
+    """Returns train cutoff as (now - 7 months)."""
+    now = pd.Timestamp.now(tz="UTC")
+    cutoff = now - pd.DateOffset(months=7)
+    return cutoff.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
 def load_candles(conn: sqlite3.Connection, symbol: str) -> pd.DataFrame:
@@ -90,7 +96,7 @@ def merge_funding(candles: pd.DataFrame, funding: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def train_directional(conn: sqlite3.Connection, symbol: str, direction: str) -> dict | None:
+def train_directional(conn: sqlite3.Connection, symbol: str, direction: str, models_base: Path) -> dict | None:
     """Train a directional regime model and save it."""
     direction = direction.upper()
     assert direction in ("LONG", "SHORT"), f"Invalid direction: {direction}"
@@ -128,7 +134,10 @@ def train_directional(conn: sqlite3.Connection, symbol: str, direction: str) -> 
     X = dir_entries[FEATURE_NAMES]
     y = dir_entries["label"]
 
-    train_mask = dir_entries.index < TRAIN_CUTOFF
+    train_cutoff = get_train_cutoff()
+    print(f"Train cutoff: {train_cutoff.strftime('%Y-%m-%d')}")
+
+    train_mask = dir_entries.index < train_cutoff
     X_train, y_train = X[train_mask], y[train_mask]
     X_test, y_test = X[~train_mask], y[~train_mask]
 
@@ -255,7 +264,7 @@ def train_directional(conn: sqlite3.Connection, symbol: str, direction: str) -> 
     # --- Save model ---
     dir_suffix = direction.lower()
     feature_ver = f"{FEATURE_VERSION}_{dir_suffix}"
-    model_dir = MODELS_BASE / f"regime_v1_{dir_suffix}"
+    model_dir = models_base / f"regime_v1_{dir_suffix}"
     model_dir.mkdir(parents=True, exist_ok=True)
 
     model_path = model_dir / f"{symbol}.pkl"
@@ -314,7 +323,11 @@ def main():
                         help="Direction: LONG or SHORT (default: LONG)")
     parser.add_argument("--all", action="store_true",
                         help="Train all viable symbol+direction combos")
+    parser.add_argument("--models-base", type=str, default=None,
+                        help="Base directory for models (default: ml/models)")
     args = parser.parse_args()
+
+    models_base = Path(args.models_base) if args.models_base else MODELS_BASE
 
     conn = sqlite3.connect(str(DB_PATH))
     try:
@@ -323,7 +336,7 @@ def main():
             results = {}
             for sym in SYMBOLS:
                 for direction in ["LONG", "SHORT"]:
-                    meta = train_directional(conn, sym, direction)
+                    meta = train_directional(conn, sym, direction, models_base)
                     if meta:
                         results[f"{sym}_{direction}"] = meta
 
@@ -341,7 +354,7 @@ def main():
                           f"{m['auc_gap']:>+8.4f}")
         else:
             # Train single symbol+direction
-            meta = train_directional(conn, args.symbol, args.direction)
+            meta = train_directional(conn, args.symbol, args.direction, models_base)
             if meta is None:
                 print(f"\n❌ Failed to train {args.symbol} {args.direction}")
                 sys.exit(1)

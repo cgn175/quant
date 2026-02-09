@@ -49,7 +49,13 @@ except ImportError:
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "training.db"
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models" / "vol_v1"
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
-TRAIN_CUTOFF = pd.Timestamp("2025-07-01", tz="UTC")
+
+# Rolling window train/test split (last 7 months as test)
+def get_train_cutoff():
+    """Returns train cutoff as (now - 7 months)."""
+    now = pd.Timestamp.now(tz="UTC")
+    cutoff = now - pd.DateOffset(months=7)
+    return cutoff.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 # Small constant to avoid log(0)
 LOG_EPS = 1e-8
@@ -86,7 +92,7 @@ def predict_range(model, features: np.ndarray) -> np.ndarray:
     return np.exp(log_pred) - LOG_EPS
 
 
-def train_symbol(conn: sqlite3.Connection, symbol: str) -> dict:
+def train_symbol(conn: sqlite3.Connection, symbol: str, model_dir: Path) -> dict:
     print(f"\n{'='*60}")
     print(f"  VOLATILITY PREDICTOR: {symbol}")
     print(f"{'='*60}")
@@ -113,7 +119,10 @@ def train_symbol(conn: sqlite3.Connection, symbol: str) -> dict:
     # Train on log(y) to handle right-skewed distribution
     y_log = np.log(y_raw + LOG_EPS)
 
-    train_mask = df.index < TRAIN_CUTOFF
+    train_cutoff = get_train_cutoff()
+    print(f"Train cutoff: {train_cutoff.strftime('%Y-%m-%d')}")
+
+    train_mask = df.index < train_cutoff
     X_train, y_train_log = X[train_mask], y_log[train_mask]
     X_test, y_test_log = X[~train_mask], y_log[~train_mask]
     y_train_raw, y_test_raw = y_raw[train_mask], y_raw[~train_mask]
@@ -236,9 +245,9 @@ def train_symbol(conn: sqlite3.Connection, symbol: str) -> dict:
         print(f"  {name_f:20s}  {sign}{abs(coef):.4f}  {bar}")
 
     # --- Save best model ---
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = MODEL_DIR / f"{symbol}.pkl"
+    model_path = model_dir / f"{symbol}.pkl"
     joblib.dump(best_model, str(model_path))
 
     train_start = df.index[train_mask].min().strftime("%Y-%m-%d")
@@ -260,7 +269,7 @@ def train_symbol(conn: sqlite3.Connection, symbol: str) -> dict:
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    meta_path = MODEL_DIR / f"{symbol}_meta.json"
+    meta_path = model_dir / f"{symbol}_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2))
 
     print(f"\nSaved: {model_path}")
@@ -274,9 +283,11 @@ def main():
         description="Train Volatility Predictor (Dynamic Stop-Loss) models"
     )
     parser.add_argument("--symbol", type=str, default=None, help="Train single symbol")
+    parser.add_argument("--model-dir", type=str, default=None, help="Model output directory (default: ml/models/vol_v1)")
     args = parser.parse_args()
 
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    model_dir = Path(args.model_dir) if args.model_dir else MODEL_DIR
+    model_dir.mkdir(parents=True, exist_ok=True)
 
     symbols = [args.symbol] if args.symbol else SYMBOLS
 
@@ -284,7 +295,7 @@ def main():
     try:
         results = {}
         for sym in symbols:
-            meta = train_symbol(conn, sym)
+            meta = train_symbol(conn, sym, model_dir)
             if meta:
                 results[sym] = meta
 

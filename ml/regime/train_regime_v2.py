@@ -53,7 +53,13 @@ except ImportError:
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "training.db"
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models" / "regime_v2"
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
-TRAIN_CUTOFF = pd.Timestamp("2025-07-01", tz="UTC")
+
+# Rolling window train/test split (last 7 months as test)
+def get_train_cutoff():
+    """Returns train cutoff as (now - 7 months)."""
+    now = pd.Timestamp.now(tz="UTC")
+    cutoff = now - pd.DateOffset(months=7)
+    return cutoff.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
 def load_candles(conn: sqlite3.Connection, symbol: str) -> pd.DataFrame:
@@ -152,7 +158,7 @@ def train_model(X_train, y_train, X_test, y_test, feature_names, label=""):
     return model, metrics, y_test_proba
 
 
-def train_symbol(conn: sqlite3.Connection, symbol: str) -> dict:
+def train_symbol(conn: sqlite3.Connection, symbol: str, model_dir: Path) -> dict:
     print(f"\n{'='*70}")
     print(f"  REGIME v1 vs v2 COMPARISON: {symbol}")
     print(f"{'='*70}")
@@ -189,7 +195,10 @@ def train_symbol(conn: sqlite3.Connection, symbol: str) -> dict:
           f"({entries_v1['label'].mean()*100:.1f}%)")
 
     # --- Train/test split ---
-    train_mask = entries_v1.index < TRAIN_CUTOFF
+    train_cutoff = get_train_cutoff()
+    print(f"Train cutoff: {train_cutoff.strftime('%Y-%m-%d')}")
+
+    train_mask = entries_v1.index < train_cutoff
     n_train = train_mask.sum()
     n_test = (~train_mask).sum()
 
@@ -281,8 +290,8 @@ def train_symbol(conn: sqlite3.Connection, symbol: str) -> dict:
               f"{d:>+6.1f}pp  {e1['pass_pct']:>7.0f}%  {e2['pass_pct']:>7.0f}%")
 
     # --- Save v2 model if it improves on v1 ---
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = MODEL_DIR / f"{symbol}.pkl"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model_path = model_dir / f"{symbol}.pkl"
     joblib.dump(model_v2, str(model_path))
 
     meta = {
@@ -306,7 +315,7 @@ def train_symbol(conn: sqlite3.Connection, symbol: str) -> dict:
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    meta_path = MODEL_DIR / f"{symbol}_meta.json"
+    meta_path = model_dir / f"{symbol}_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2))
     print(f"\nSaved v2 model: {model_path}")
     print(f"Saved v2 meta:  {meta_path}")
@@ -327,15 +336,17 @@ def main():
         description="Train Regime Classifier v2 (8 features) and compare to v1 (6 features)"
     )
     parser.add_argument("--symbol", type=str, default=None, help="Train single symbol")
+    parser.add_argument("--model-dir", type=str, default=None, help="Model output directory (default: ml/models/regime_v2)")
     args = parser.parse_args()
 
+    model_dir = Path(args.model_dir) if args.model_dir else MODEL_DIR
     symbols = [args.symbol] if args.symbol else SYMBOLS
 
     conn = sqlite3.connect(str(DB_PATH))
     try:
         results = {}
         for sym in symbols:
-            result = train_symbol(conn, sym)
+            result = train_symbol(conn, sym, model_dir)
             if result:
                 results[sym] = result
 

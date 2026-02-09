@@ -232,6 +232,20 @@ flowchart LR
 
 ## Monitoring
 
+### Automated ML Retraining
+
+A comprehensive pipeline (`scripts/retrain_pipeline.py`) automates the ML lifecycle:
+- **Fetch**: Incremental data ingestion from Binance
+- **Train**: Retrains all model variants (Regime v1/v2, Volatility v1)
+- **Evaluate**: Compares new models against live baselines (AUC/MAE gates)
+- **Deploy**: Atomic swap with rollback on failure
+- **Notify**: Telegram alerts and Prometheus metrics
+
+To enable (runs daily at 2am UTC):
+```bash
+0 2 * * * cd /path/to/quant && python3 scripts/retrain_pipeline.py run >> logs/retrain.log 2>&1
+```
+
 ### Prometheus metrics
 
 Examples (names may vary slightly):
