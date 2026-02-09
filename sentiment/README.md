@@ -30,7 +30,7 @@ cp .env.example .env
 
 **Reddit OAuth Setup (Required):**
 
-Reddit now requires OAuth 2.0. See detailed guide: **`../docs/REDDIT_OAUTH_SETUP.md`**
+Reddit now requires OAuth 2.0. See detailed guide: **`docs/REDDIT_OAUTH_SETUP.md`**
 
 Quick steps:
 1. Visit https://www.reddit.com/prefs/apps

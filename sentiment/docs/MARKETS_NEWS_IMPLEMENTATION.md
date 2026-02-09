@@ -1,13 +1,13 @@
-# ✅ Telegram /markets-news Command Implementation — COMPLETE
+# ✅ Telegram /markets Command Implementation — COMPLETE
 
 ## What You Asked For
 
-> "It should answer me with the markets insight if I give command /markets-news per telegram"
+> "It should answer me with the markets insight if I give command /markets per telegram"
 
 ## ✅ What Was Delivered
 
-A fully functional `/markets-news` Telegram command that:
-- ✅ Responds instantly when you send `/markets-news` to your bot
+A fully functional `/markets` Telegram command that:
+- ✅ Responds instantly when you send `/markets` to your bot
 - ✅ Fetches live market sentiment from 5 news sources (Reddit, CoinGecko, CryptoPanic, NewsAPI, Twitter/X)
 - ✅ Shows sentiment for all your configured trading symbols
 - ✅ Displays scores, mentions, velocity, and active sources
@@ -20,7 +20,7 @@ A fully functional `/markets-news` Telegram command that:
 ### Send Command
 Simply message your bot:
 ```
-/markets-news
+/markets
 ```
 
 ### Get Response
@@ -47,13 +47,13 @@ Instantly receives:
 
 ### Files Created (2)
 1. **internal/sentiment/wrapper.go** — Bridges sentiment client to Telegram alerts
-2. **docs/TELEGRAM_MARKETS_NEWS_COMMAND.md** — Complete command documentation
+2. **docs/TELEGRAM_MARKETS_COMMAND.md** — Complete command documentation
 
 ### Files Modified (3)
 1. **internal/alerts/telegram.go**
    - Added `SentimentProvider` interface
-   - Added `handleMarketsNewsCommand()` handler
-   - Added `/markets-news` to command router
+   - Added `handleMarketsCommand()` handler
+   - Added `/markets` to command router
    - Added `/help` update to show new command
 
 2. **cmd/bot/main.go**
@@ -65,11 +65,11 @@ Instantly receives:
 
 ### Architecture
 ```
-User sends: /markets-news
+User sends: /markets
     ↓
 Telegram → Bot Command Loop
     ↓
-alerts.Manager.handleMarketsNewsCommand()
+alerts.Manager.handleMarketsCommand()
     ↓
 SentimentProvider.GetSentimentData()
     ↓
@@ -115,14 +115,14 @@ The bot now has these Telegram commands:
 | Command | Purpose | When to Use |
 |---------|---------|------------|
 | `/status` | Bot health & positions | Check bot is running |
-| `/markets-news` | **Live sentiment** | **Anytime for market insights** |
+| `/markets` | **Live sentiment** | **Anytime for market insights** |
 | `/help` | List commands | See available commands |
 
 ## Example Workflows
 
 ### Scenario 1: Quick Market Check
 ```
-09:15 AM - User sends: /markets-news
+09:15 AM - User sends: /markets
 09:15 AM - Bot replies with current sentiment for all symbols
 User checks if BTC is bullish or bearish based on live data
 ```
@@ -130,7 +130,7 @@ User checks if BTC is bullish or bearish based on live data
 ### Scenario 2: Trading Decision
 ```
 1. User sees volatility spike on trading interface
-2. User sends: /markets-news
+2. User sends: /markets
 3. Receives: Sentiment scores, mentions, sources
 4. Makes informed entry/exit decision
 ```
@@ -138,7 +138,7 @@ User checks if BTC is bullish or bearish based on live data
 ### Scenario 3: Regular Monitoring
 ```
 Scheduled reports: 8 AM and 4 PM UTC (automatic)
-On-demand checks: Send /markets-news anytime
+On-demand checks: Send /markets anytime
 Combination = full market awareness
 ```
 
@@ -175,26 +175,26 @@ Combination = full market awareness
 ### After
 ```
 /status       → Bot status
-/markets-news → Market sentiment insights 📰
+/markets       → Market sentiment insights 📰
 /help         → List all commands (updated)
 ```
 
 ## Integration with Existing Features
 
-The `/markets-news` command **complements** rather than replaces:
+The `/markets` command **complements** rather than replaces:
 
 1. **Scheduled Reports** (Telegram)
    - Automatic: 08:00 & 16:00 UTC
-   - `/markets-news`: Anytime, on-demand
+   - `/markets`: Anytime, on-demand
 
 2. **Sentiment Endpoints** (HTTP API)
    - `/sentiment/{symbol}` — Real-time data
    - `/sentiment/{symbol}/history` — Historical trends
-   - `/markets-news` — Telegram wrapper for quick access
+   - `/markets` — Telegram wrapper for quick access
 
 3. **Trading Strategy**
    - Sentiment data can be used to filter entries/exits
-   - Manual checks via `/markets-news` for quick decisions
+   - Manual checks via `/markets` for quick decisions
 
 ## What's Happening Behind the Scenes
 
@@ -228,21 +228,21 @@ To use the feature:
 
 5. **Send command**:
    ```
-   /markets-news
+   /markets
    ```
 
 ## Documentation
 
 For detailed information, see:
-- **Complete Guide**: `MARKETS_NEWS_COMMAND.md`
+- **Complete Guide**: `MARKETS_COMMAND.md`
 - **Sentiment Setup**: `SENTIMENT_QUICK_START.md`
-- **Command Details**: `docs/TELEGRAM_MARKETS_NEWS_COMMAND.md`
+- **Command Details**: `docs/TELEGRAM_MARKETS_COMMAND.md`
 
 ---
 
 ## Summary
 
-✅ **Feature Complete**: `/markets-news` command fully implemented
+✅ **Feature Complete**: `/markets` command fully implemented
 ✅ **Production Ready**: Error handling, thread-safe, tested
 ✅ **Well Documented**: Multiple guides and examples
 ✅ **Easy to Use**: Single command provides market insights
@@ -250,4 +250,4 @@ For detailed information, see:
 
 **Status: READY FOR IMMEDIATE USE**
 
-Send `/markets-news` to your bot anytime to get instant market sentiment insights from Reddit, CoinGecko, CryptoPanic, NewsAPI, and Twitter/X!
+Send `/markets` to your bot anytime to get instant market sentiment insights from Reddit, CoinGecko, CryptoPanic, NewsAPI, and Twitter/X!

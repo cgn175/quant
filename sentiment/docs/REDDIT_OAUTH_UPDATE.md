@@ -10,7 +10,7 @@ Created comprehensive documentation for Reddit OAuth 2.0 setup and updated all g
 
 ## Files Created
 
-### `docs/REDDIT_OAUTH_SETUP.md` (NEW)
+### `sentiment/docs/REDDIT_OAUTH_SETUP.md` (NEW)
 Complete step-by-step guide for Reddit OAuth:
 - How to create a Reddit account and access the app registration page
 - Step-by-step instructions for creating an OAuth app
@@ -23,13 +23,13 @@ Complete step-by-step guide for Reddit OAuth:
 
 ## Files Updated
 
-### 1. `SENTIMENT_QUICK_START.md`
+### 1. `sentiment/docs/SENTIMENT_QUICK_START.md`
 - Added clear mention that Reddit now uses OAuth
 - Reference to detailed OAuth guide
 - Instructions to select "script" type (not "web app")
 - Updated credential configuration section
 
-### 2. `SENTIMENT_README.md`
+### 2. `sentiment/docs/SENTIMENT_README.md`
 - Updated quick start section with OAuth mention
 - Link to Reddit OAuth setup guide
 - Clear instructions about using script type
@@ -37,7 +37,7 @@ Complete step-by-step guide for Reddit OAuth:
 
 ### 3. `sentiment/README.md`
 - Added Reddit OAuth setup section
-- Link to detailed guide at `../docs/REDDIT_OAUTH_SETUP.md`
+- Link to detailed guide at `sentiment/docs/REDDIT_OAUTH_SETUP.md`
 - Quick steps to create app and get credentials
 - Environment variable configuration
 
@@ -126,13 +126,13 @@ SENTIMENT_NEWSAPI_KEY=your_key  # Free tier
 
 ```
 User Guides:
-├── SENTIMENT_QUICK_START.md          → Quick setup, mentions OAuth
-├── SENTIMENT_README.md               → Full features, OAuth section
-├── sentiment/README.md               → API docs, OAuth details
-└── docs/REDDIT_OAUTH_SETUP.md        → Complete OAuth guide (NEW)
+├── sentiment/docs/SENTIMENT_QUICK_START.md   → Quick setup, mentions OAuth
+├── sentiment/docs/SENTIMENT_README.md        → Full features, OAuth section
+├── sentiment/README.md                       → API docs, OAuth details
+└── sentiment/docs/REDDIT_OAUTH_SETUP.md      → Complete OAuth guide (NEW)
 
 Changelog:
-└── This file                          → What was updated and why
+└── sentiment/docs/REDDIT_OAUTH_UPDATE.md     → What was updated and why
 ```
 
 ## Summary
@@ -146,6 +146,6 @@ Changelog:
 **Status: COMPLETE**
 
 Users can now:
-1. Follow `docs/REDDIT_OAUTH_SETUP.md` for step-by-step OAuth setup
+1. Follow `sentiment/docs/REDDIT_OAUTH_SETUP.md` for step-by-step OAuth setup
 2. Or use alternative data sources (CoinGecko, CryptoPanic, NewsAPI)
 3. Sentiment service works with or without Reddit data

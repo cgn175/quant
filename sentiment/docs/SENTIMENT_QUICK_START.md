@@ -151,7 +151,7 @@ You'll receive messages like:
 
 **Automatic:** Scheduled at 08:00 and 16:00 UTC daily
 
-**On-Demand:** Send `/markets-news` command to get instant sentiment insights anytime
+**On-Demand:** Send `/markets` command to get instant sentiment insights anytime
 
 **Emoji guide:**
 - 📈 = Bullish (score > 0.3)

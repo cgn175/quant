@@ -427,3 +427,20 @@ class SentimentDB:
             return True
 
         return await self.loop.run_in_executor(None, _cleanup)
+
+    async def has_any_data(self) -> bool:
+        """Return True if any sentiment data exists in the database."""
+
+        def _check():
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT 1 FROM sentiment_hourly LIMIT 1")
+                if cursor.fetchone():
+                    return True
+                cursor.execute("SELECT 1 FROM sentiment_daily LIMIT 1")
+                return cursor.fetchone() is not None
+            finally:
+                conn.close()
+
+        return await self.loop.run_in_executor(None, _check)

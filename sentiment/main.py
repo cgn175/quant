@@ -38,6 +38,8 @@ fetchers = {
 # Database
 sentiment_db = SentimentDB(db_path="sentiment.db")
 
+DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+
 
 class SentimentResponse(BaseModel):
     symbol: str
@@ -310,6 +312,7 @@ async def startup():
     get_analyzer()
     asyncio.create_task(cleanup_old_data())
     asyncio.create_task(cleanup_database())
+    asyncio.create_task(backfill_history_if_empty())
 
 
 async def cleanup_old_data():
@@ -320,7 +323,9 @@ async def cleanup_old_data():
             cutoff = now - timedelta(hours=24)
             stale_cutoff = now - timedelta(hours=1)
             for symbol in list(post_history.keys()):
-                post_history[symbol] = [(ts, s) for ts, s in post_history[symbol] if ts >= cutoff]
+                post_history[symbol] = [
+                    (ts, s) for ts, s in post_history[symbol] if ts >= cutoff
+                ]
                 if not post_history[symbol]:
                     del post_history[symbol]
             for symbol in list(sentiment_cache.keys()):
@@ -333,8 +338,76 @@ async def cleanup_database():
     while True:
         await asyncio.sleep(3600)  # Every hour
         await sentiment_db.cleanup_old_data()
-                if sentiment_cache[symbol]["timestamp"] < stale_cutoff:
-                    del sentiment_cache[symbol]
+
+
+async def backfill_history_if_empty():
+    """If the DB is empty, attempt to backfill up to 7 days of sentiment history."""
+    try:
+        if await sentiment_db.has_any_data():
+            return
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=7)
+
+        for symbol in DEFAULT_SYMBOLS:
+            await backfill_symbol_history(symbol, cutoff)
+    except Exception:
+        # Best-effort only; skip on failure.
+        return
+
+
+async def backfill_symbol_history(symbol: str, cutoff: datetime):
+    """Backfill daily sentiment for a symbol using any available posts."""
+    fetch_tasks = [fetcher.fetch(symbol, limit=200) for fetcher in fetchers.values()]
+    all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+    posts = []
+    for result in all_results:
+        if isinstance(result, list) and result:
+            posts.extend(result)
+
+    if not posts:
+        return
+
+    analyzer = get_analyzer()
+    texts = [p.text for p in posts]
+    sentiments = analyzer.analyze(texts)
+
+    daily_buckets: dict[str, dict] = {}
+    for post, sent in zip(posts, sentiments):
+        if post.timestamp < cutoff:
+            continue
+        date_key = post.timestamp.date().isoformat()
+        bucket = daily_buckets.setdefault(
+            date_key,
+            {
+                "pos": 0.0,
+                "neg": 0.0,
+                "neu": 0.0,
+                "weight": 0.0,
+                "mentions": 0,
+                "sources": set(),
+            },
+        )
+        weight = max(1, post.score) if post.score > 0 else 1
+        bucket["pos"] += sent["positive"] * weight
+        bucket["neg"] += sent["negative"] * weight
+        bucket["neu"] += sent["neutral"] * weight
+        bucket["weight"] += weight
+        bucket["mentions"] += 1
+        bucket["sources"].add(post.source)
+
+    for date_key, bucket in daily_buckets.items():
+        total_weight = bucket["weight"] or 1.0
+        await sentiment_db.save_daily_sentiment(
+            symbol=symbol,
+            date=date_key,
+            score_positive=bucket["pos"] / total_weight,
+            score_negative=bucket["neg"] / total_weight,
+            score_neutral=bucket["neu"] / total_weight,
+            mentions_count=bucket["mentions"],
+            sources=sorted(bucket["sources"]),
+        )
 
 
 if __name__ == "__main__":

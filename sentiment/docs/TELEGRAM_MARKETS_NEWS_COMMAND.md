@@ -1,14 +1,14 @@
-# Telegram /markets-news Command
+# Telegram /markets Command
 
 ## Overview
 
-The `/markets-news` command provides instant market sentiment insights via Telegram by fetching and summarizing sentiment data from multiple news sources (Reddit, CoinGecko, CryptoPanic, NewsAPI, Twitter/X).
+The `/markets` command provides instant market sentiment insights via Telegram by fetching and summarizing sentiment data from multiple news sources (Reddit, CoinGecko, CryptoPanic, NewsAPI, Twitter/X).
 
 ## Usage
 
 Send the command to your bot:
 ```
-/markets-news
+/markets
 ```
 
 ## Response Example
@@ -100,12 +100,12 @@ symbols:
 | Command | Purpose |
 |---------|---------|
 | `/status` | Bot health and position status |
-| `/markets-news` | Market sentiment from news sources |
+| `/markets` | Market sentiment from news sources |
 | `/help` | List all available commands |
 
 ## Auto-Scheduled Reports
 
-In addition to on-demand `/markets-news` queries, the bot can send automatic sentiment reports:
+In addition to on-demand `/markets` queries, the bot can send automatic sentiment reports:
 
 ```yaml
 sentiment:
@@ -133,7 +133,7 @@ The underlying sentiment service also exposes HTTP endpoints:
 
 ## Advanced: Filtering by Source
 
-Currently, the `/markets-news` command shows all available sources. To filter by specific sources, you can:
+Currently, the `/markets` command shows all available sources. To filter by specific sources, you can:
 
 1. **Configure sources in sentiment service** (`sentiment/.env`)
 2. **Leave optional sources unconfigured** to exclude them

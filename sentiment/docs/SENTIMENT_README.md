@@ -44,9 +44,9 @@ curl "http://localhost:8000/sentiment/BTCUSDT/history?days=7&period=hourly"
 ```
 
 ### 📰 On-Demand Market News
-Send `/markets-news` command via Telegram to get instant sentiment insights:
+Send `/markets` command via Telegram to get instant sentiment insights:
 ```
-/markets-news
+/markets
 ```
 
 Returns current sentiment for all configured symbols with sources and trends.
@@ -59,7 +59,7 @@ Returns current sentiment for all configured symbols with sources and trends.
 - Visit https://www.reddit.com/prefs/apps
 - Create app (select "script" type)
 - Copy Client ID & Secret
-- **Full setup guide**: See `docs/REDDIT_OAUTH_SETUP.md`
+- **Full setup guide**: See `sentiment/docs/REDDIT_OAUTH_SETUP.md`
 
 **Optional Sources** (all free tiers):
 - CoinGecko.com/api — No auth needed, just use
@@ -136,68 +136,6 @@ go build ./cmd/bot && ./bin/bot -c config.yaml
 └──────────────────────────────────┘
 ```
 
-## Files Created (21 Total)
-
-### Python Sentiment Service (11 files)
-✅ `sentiment/db.py` — SQLite layer with 4 tables & auto-cleanup
-✅ `sentiment/fetchers/coingecko.py` — Free market data
-✅ `sentiment/fetchers/cryptopanic.py` — Crypto news
-✅ `sentiment/fetchers/twitter.py` — Real-time tweets (paid)
-✅ `sentiment/fetchers/newsapi.py` — General finance news
-✅ `sentiment/main.py` — FastAPI server with multi-source aggregation
-✅ `sentiment/config.py` — Settings management
-✅ `sentiment/models/__init__.py` — FinBERT export
-✅ `sentiment/test_sentiment.py` — Comprehensive unit tests
-✅ `sentiment/README.md` — Full API documentation
-✅ Enhanced `sentiment/requirements.txt` — Dependencies
-
-### Go Bot Integration (4 files)
-✅ `internal/sentiment/scheduler.go` — Telegram notification scheduler
-✅ Enhanced `internal/sentiment/client.go` — Historical data support
-✅ Enhanced `internal/config/config.go` — Sentiment config struct
-✅ Enhanced `cmd/bot/main.go` — Service initialization
-
-### Configuration & Documentation (6 files)
-✅ Enhanced `config.yaml.example` — Sentiment settings
-✅ Enhanced `env.example` — API key placeholders
-✅ Enhanced `docker-compose.yaml` — Service env vars
-✅ Enhanced `sentiment/.env.example` — Service credentials
-✅ `SENTIMENT_IMPLEMENTATION.md` — Full implementation details
-✅ `SENTIMENT_QUICK_START.md` — Setup guide
-✅ `SENTIMENT_CHECKLIST.md` — Verification checklist
-
-## Key Statistics
-
-| Metric | Value |
-|--------|-------|
-| Lines of code added | ~2,500+ |
-| Python files | 11 |
-| Go files | 4 |
-| Database tables | 4 |
-| News sources | 5 |
-| API endpoints | 3 |
-| Notification frequency | 2x/day |
-| Data retention | 7d hourly + 2y daily |
-| Memory usage | ~2.5GB (model: ~2GB) |
-| Latency per request | 100-800ms |
-
-## Sentiment Scores Explained
-
-- **Range**: -1 (bearish) to +1 (bullish)
-- **Calculation**: Weighted average of 5 sources
-- **1h score**: Last hour sentiment (reactive)
-- **24h score**: Last 24 hours sentiment (trend)
-- **Velocity**: Acceleration (recent vs older)
-- **Z-score**: Mention anomaly detection
-
-### Example Interpretation
-```
-Score: +0.25   → Moderately bullish
-Score: -0.10   → Slightly bearish  
-Score: +0.50   → Very bullish
-Z-score: 2.0   → Unusual mention spike
-```
-
 ## Configuration Options
 
 ```yaml
@@ -259,60 +197,6 @@ go build ./cmd/bot
 
 See **`sentiment/README.md`** for detailed troubleshooting.
 
-## Security & Privacy
-
-✅ **No API keys hardcoded** — All via environment variables
-✅ **Rate limit compliance** — All fetchers respect API limits
-✅ **Timeout protection** — 10 second default per request
-✅ **Error handling** — Graceful degradation if source fails
-✅ **Data retention** — Automatic cleanup after retention period
-
-## Next Steps
-
-### Immediate (5 min)
-1. Copy `env.example` → `.env`
-2. Add Reddit credentials
-3. Set `sentiment.enabled: true` in `config.yaml`
-4. Restart bot
-
-### Soon (30 min)
-1. Add Telegram token to config
-2. Start sentiment service
-3. Verify notifications arrive
-
-### Optional (60 min)
-1. Add CoinGecko/CryptoPanic/NewsAPI keys
-2. Analyze sentiment trends in historical data
-3. Use sentiment in trading strategy
-
-## Support & Documentation
-
-- 📖 **API Docs** — `sentiment/README.md`
-- 🚀 **Quick Start** — `SENTIMENT_QUICK_START.md`
-- 🔍 **Implementation** — `SENTIMENT_IMPLEMENTATION.md`
-- ✅ **Verification** — `SENTIMENT_CHECKLIST.md`
-
-## Performance Notes
-
-- **Model loading**: ~5-10 seconds (first run, cached after)
-- **Per-request**: 100-800ms (depends on source speed)
-- **Inference**: ~100-200ms for 100 posts (20ms on GPU)
-- **DB writes**: <5ms each
-- **History queries**: <20ms
-
-## What Makes This Production-Ready
-
-✅ **Comprehensive error handling** — No crashes from API failures
-✅ **Async operations** — Non-blocking, parallel fetching
-✅ **Database persistence** — Historical data for analysis
-✅ **Automatic cleanup** — Retention policies enforced
-✅ **Type safety** — Pydantic models + Go interfaces
-✅ **Logging** — Debug-level insights
-✅ **Tests** — Unit tests cover core functionality
-✅ **Documentation** — API docs, guides, troubleshooting
-✅ **Security** — No hardcoded secrets, timeouts, rate limits
-✅ **Reliability** — Graceful degradation, fallbacks
-
 ## Summary
 
 🎉 **You now have:**
@@ -325,13 +209,4 @@ See **`sentiment/README.md`** for detailed troubleshooting.
 6. **Production Code** — Error handling, async, tested
 7. **Complete Documentation** — Setup, API, troubleshooting
 
-**Ready to deploy? Follow SENTIMENT_QUICK_START.md**
-
----
-
-**Questions?** Check:
-- `sentiment/README.md` for API details
-- `SENTIMENT_QUICK_START.md` for setup
-- `SENTIMENT_CHECKLIST.md` for verification
-
-**Status: ✅ IMPLEMENTATION COMPLETE & READY FOR DEPLOYMENT**
+**Ready to deploy? Follow `sentiment/docs/SENTIMENT_QUICK_START.md`**

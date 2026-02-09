@@ -116,7 +116,7 @@ func (m *Manager) SetStatusProvider(provider StatusProvider) {
 	m.statusProvider = provider
 }
 
-// SetSentimentProvider sets the sentiment provider for the /markets-news command.
+// SetSentimentProvider sets the sentiment provider for the /markets command.
 func (m *Manager) SetSentimentProvider(provider SentimentProvider) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -174,7 +174,7 @@ func (m *Manager) commandLoop(ctx context.Context) {
 			switch update.Message.Command() {
 			case "status":
 				m.handleStatusCommand(update.Message)
-			case "markets-news":
+			case "markets":
 				m.handleMarketsNewsCommand(update.Message)
 			case "help":
 				m.handleHelpCommand(update.Message)
@@ -271,7 +271,7 @@ _Status provider not configured_`,
 	}
 }
 
-// handleMarketsNewsCommand handles the /markets-news command.
+// handleMarketsNewsCommand handles the /markets command.
 func (m *Manager) handleMarketsNewsCommand(msg *tgbotapi.Message) {
 	m.mu.Lock()
 	provider := m.sentimentProvider
@@ -342,7 +342,7 @@ func (m *Manager) handleHelpCommand(msg *tgbotapi.Message) {
 	helpMsg := `🤖 *Quant Bot Commands*
 
 /status \\- Show bot status and health info
-/markets\\-news \\- Show market sentiment news
+/markets \\- Show market sentiment news
 /help \\- Show this help message`
 
 	reply := tgbotapi.NewMessage(msg.Chat.ID, helpMsg)
@@ -356,8 +356,6 @@ func (m *Manager) handleHelpCommand(msg *tgbotapi.Message) {
 		m.bot.Send(reply)
 	}
 }
-
-// ...existing code...
 
 // formatDuration formats a duration in a human-readable way.
 func formatDuration(d time.Duration) string {

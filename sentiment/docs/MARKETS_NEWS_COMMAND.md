@@ -1,8 +1,8 @@
-# /markets-news Command Implementation — Complete
+# /markets Command Implementation — Complete
 
 ## What Was Added
 
-A new Telegram command `/markets-news` that provides instant market sentiment insights by fetching live sentiment data from the sentiment service and formatting it for easy reading on Telegram.
+A new Telegram command `/markets` that provides instant market sentiment insights by fetching live sentiment data from the sentiment service and formatting it for easy reading on Telegram.
 
 ## Files Modified
 
@@ -12,9 +12,9 @@ A new Telegram command `/markets-news` that provides instant market sentiment in
 - Added `SentimentProvider` interface
 - Added `sentimentProvider` field to Manager struct
 - Added `SetSentimentProvider()` method
-- Added `/markets-news` command handler (`handleMarketsNewsCommand()`)
+- Added `/markets` command handler (`handleMarketsNewsCommand()`)
 - Updated `/help` command to include new command
-- Updated command loop to route `/markets-news` command
+- Updated command loop to route `/markets` command
 
 **internal/sentiment/wrapper.go** (NEW)
 - Created `SentimentDataWrapper` struct
@@ -25,7 +25,7 @@ A new Telegram command `/markets-news` that provides instant market sentiment in
 **cmd/bot/main.go**
 - Create `SentimentDataWrapper` after sentiment scheduler
 - Call `alertMgr.SetSentimentProvider()` to wire it up
-- Enables `/markets-news` command when sentiment is enabled
+- Enables `/markets` command when sentiment is enabled
 
 ### 2. Documentation (1 file)
 
@@ -39,7 +39,7 @@ A new Telegram command `/markets-news` that provides instant market sentiment in
 ### 3. Updated Documentation (2 files)
 
 **SENTIMENT_README.md**
-- Added `/markets-news` section
+- Added `/markets` section
 - Explains on-demand sentiment queries
 
 **SENTIMENT_QUICK_START.md**
@@ -50,7 +50,7 @@ A new Telegram command `/markets-news` that provides instant market sentiment in
 
 ### 1. User Sends Command
 ```
-User: /markets-news
+User: /markets
 ```
 
 ### 2. Bot Receives & Routes
@@ -135,7 +135,7 @@ The bot creates a `SentimentDataWrapper` that bridges:
 - **Bot Config** → Symbol list and enabled check
 
 ### With Telegram Command Handler
-The command loop in `alerts/telegram.go` routes `/markets-news` to the handler, which:
+The command loop in `alerts/telegram.go` routes `/markets` to the handler, which:
 1. Checks if sentiment provider is set
 2. Gets list of symbols from provider
 3. Fetches current sentiment for each symbol
@@ -202,7 +202,7 @@ Fallback: Send plain text (removes markdown formatting)
 ### Manual Testing
 1. Start sentiment service: `cd sentiment && python main.py`
 2. Start bot: `go build ./cmd/bot && ./bin/bot -c config.yaml`
-3. Send command to bot: `/markets-news`
+3. Send command to bot: `/markets`
 4. Verify response appears in Telegram
 
 ### Verification
@@ -211,13 +211,13 @@ Fallback: Send plain text (removes markdown formatting)
 /help
 
 # Should include:
-# /markets-news - Show market sentiment news
+# /markets - Show market sentiment news
 ```
 
 ### Error Scenarios
-1. Send `/markets-news` with sentiment disabled → Error message
-2. Send `/markets-news` with no sentiment data → Error message
-3. Send `/markets-news` with sentiment data → Full response
+1. Send `/markets` with sentiment disabled → Error message
+2. Send `/markets` with no sentiment data → Error message
+3. Send `/markets` with sentiment data → Full response
 
 ## Performance
 
@@ -230,7 +230,7 @@ Fallback: Send plain text (removes markdown formatting)
 
 ## Comparison: Scheduled vs On-Demand
 
-| Aspect | Scheduled Report | /markets-news Command |
+| Aspect | Scheduled Report | /markets Command |
 |--------|------------------|----------------------|
 | **Timing** | 08:00, 16:00 UTC (fixed) | Anytime user requests |
 | **Frequency** | 2x daily | Up to user |
@@ -251,17 +251,17 @@ Fallback: Send plain text (removes markdown formatting)
 
 Potential improvements:
 
-1. **Filter by source**: `/markets-news reddit,coingecko`
-2. **Show history**: `/markets-news history=7`
-3. **Alert thresholds**: `/markets-news --alert 0.5` (only if >0.5)
-4. **Export data**: `/markets-news csv` (export as CSV)
-5. **Comparison**: `/markets-news compare=24h` (vs 24 hours ago)
+1. **Filter by source**: `/markets reddit,coingecko`
+2. **Show history**: `/markets history=7`
+3. **Alert thresholds**: `/markets --alert 0.5` (only if >0.5)
+4. **Export data**: `/markets csv` (export as CSV)
+5. **Comparison**: `/markets compare=24h` (vs 24 hours ago)
 
 ---
 
 ## Summary
 
-✅ **New Feature**: `/markets-news` Telegram command
+✅ **New Feature**: `/markets` Telegram command
 ✅ **Integration**: Seamless with existing alerts system
 ✅ **Data Source**: Pulls from sentiment service (real-time)
 ✅ **Formatting**: Emoji-based, easy to read
@@ -271,4 +271,4 @@ Potential improvements:
 
 **Status: COMPLETE & READY FOR USE**
 
-Send `/markets-news` to your bot anytime to get instant market sentiment insights!
+Send `/markets` to your bot anytime to get instant market sentiment insights!
