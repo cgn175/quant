@@ -1,0 +1,17 @@
+symbol: BNBUSDT
+optimized_at: '2026-02-09T01:05:35.908610+00:00'
+train_score_cv_sortino: 43.2557
+test_score_oos_sortino: 2.2333
+test_metrics:
+  total_return: 0.0131
+  sharpe: 0.6092
+  max_drawdown: 0.0267
+  win_rate: 0.4
+  num_trades: 10
+params:
+  donchian_period: 22
+  ema_fast: 6
+  ema_slow: 29
+  atr_stop_multiplier: 5.0
+  adx_threshold: 17
+  chandelier_lookback: 8

@@ -1,0 +1,14 @@
+symbol: ETHUSDT
+optimized_at: '2026-02-09T01:06:26.405648+00:00'
+train_score_cv_sortino: 310.7667
+test_score_oos_sortino: 0.0
+test_metrics:
+  total_return: 0
+  num_trades: 0
+params:
+  donchian_period: 30
+  ema_fast: 6
+  ema_slow: 20
+  atr_stop_multiplier: 2.0
+  adx_threshold: 28
+  chandelier_lookback: 10

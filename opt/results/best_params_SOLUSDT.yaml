@@ -1,0 +1,17 @@
+symbol: SOLUSDT
+optimized_at: '2026-02-09T01:06:55.347398+00:00'
+train_score_cv_sortino: 112.3547
+test_score_oos_sortino: 36.481
+test_metrics:
+  total_return: 0.0294
+  sharpe: 7.3592
+  max_drawdown: 0.017
+  win_rate: 0.5714
+  num_trades: 7
+params:
+  donchian_period: 17
+  ema_fast: 13
+  ema_slow: 25
+  atr_stop_multiplier: 4.5
+  adx_threshold: 21
+  chandelier_lookback: 11

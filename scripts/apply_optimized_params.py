@@ -36,12 +36,11 @@ def load_results(results_dir: Path) -> list[dict]:
     return results
 
 
-def consensus_params(results: list[dict]) -> dict:
+def consensus_params(all_params: list[dict]) -> dict:
     """Compute consensus: if all agree use that value, else use median/mode."""
-    if not results:
+    if not all_params:
         return {}
 
-    all_params = [r["params"] for r in results]
     keys = all_params[0].keys()
     consensus = {}
 
@@ -109,12 +108,17 @@ def main():
         print(f"No result files found in {results_dir}")
         return
 
+
     print(f"Loaded {len(results)} result file(s):")
     for r in results:
-        print(f"  {r['symbol']}: Sortino={r['sortino_ratio']:.4f}")
+        # Support both legacy and new key names
+        cv_score = r.get("train_score_cv_sortino", r.get("sortino_ratio", 0.0))
+        oos_score = r.get("test_score_oos_sortino", "N/A")
+        print(f"  {r['symbol']}: CV Sortino={cv_score:.4f}, OOS Sortino={oos_score}")
 
-    new_params = consensus_params(results)
-    print(f"\nConsensus params: {new_params}")
+    params_list = [r["params"] for r in results]
+    consensus = consensus_params(params_list)
+    print(f"\nConsensus params: {consensus}")
 
     with open(config_path) as f:
         config = yaml.safe_load(f)

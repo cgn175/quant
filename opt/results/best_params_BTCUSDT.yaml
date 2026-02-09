@@ -1,10 +1,17 @@
 symbol: BTCUSDT
-optimized_at: '2026-02-09T00:48:09.056325+00:00'
-sortino_ratio: 34.1452
+optimized_at: '2026-02-09T01:06:01.938985+00:00'
+train_score_cv_sortino: 449.6064
+test_score_oos_sortino: 17.9665
+test_metrics:
+  total_return: 0.0107
+  sharpe: 1.4255
+  max_drawdown: 0.0135
+  win_rate: 0.3333
+  num_trades: 3
 params:
-  donchian_period: 28
-  ema_fast: 6
-  ema_slow: 29
-  atr_stop_multiplier: 3.0
-  adx_threshold: 28
-  chandelier_lookback: 17
+  donchian_period: 20
+  ema_fast: 12
+  ema_slow: 21
+  atr_stop_multiplier: 4.0
+  adx_threshold: 30
+  chandelier_lookback: 5
