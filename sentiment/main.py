@@ -19,6 +19,7 @@ from fetchers import (
     RedditFetcher,
     TelegramFetcher,
     TwitterFetcher,
+    market,
 )
 from pydantic import BaseModel
 
@@ -146,6 +147,33 @@ class HealthResponse(BaseModel):
     model_loaded: bool
 
 
+class MarketSentimentResponse(BaseModel):
+    """Market-wide sentiment analysis (not symbol-specific)."""
+    
+    market_sentiment: float  # Aggregate score (-1 to 1)
+    score_positive: float
+    score_negative: float
+    score_neutral: float
+    
+    mentions: int
+    sources: list[str]
+    
+    # Market regime indicators
+    regime: str  # "extreme_fear", "fear", "neutral", "greed", "extreme_greed"
+    fear_greed_index: float  # 0-100 scale
+    
+    # Dominant narratives
+    top_keywords: list[tuple[str, int]]
+    top_narratives: list[str]
+    
+    # Category breakdown
+    regulatory_sentiment: float  # Sentiment of regulatory news
+    institutional_sentiment: float  # Sentiment of institutional news
+    technical_sentiment: float  # Sentiment of technical/development news
+    
+    timestamp: datetime
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health():
     try:
@@ -153,6 +181,36 @@ async def health():
         return HealthResponse(status="ok", model_loaded=True)
     except Exception:
         return HealthResponse(status="degraded", model_loaded=False)
+
+
+# Cache for market sentiment (separate from symbol-specific cache)
+market_sentiment_cache: dict = {}
+
+
+@app.get("/sentiment/market", response_model=MarketSentimentResponse)
+async def get_market_sentiment():
+    """
+    Get overall cryptocurrency market sentiment from general news sources.
+    
+    This endpoint fetches market-wide crypto news without filtering for specific
+    symbols. Useful for understanding overall market regime, regulatory sentiment,
+    and institutional adoption trends.
+    
+    Cache TTL: 5 minutes (market sentiment changes slower than symbol-specific)
+    """
+    # Check cache
+    if market_sentiment_cache:
+        cache_age = datetime.now(timezone.utc) - market_sentiment_cache.get("timestamp", datetime.min.replace(tzinfo=timezone.utc))
+        if cache_age < timedelta(seconds=300):  # 5 minute cache
+            return MarketSentimentResponse(**market_sentiment_cache)
+    
+    try:
+        result = await compute_market_sentiment()
+        market_sentiment_cache.clear()
+        market_sentiment_cache.update(result)
+        return MarketSentimentResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/sentiment/{symbol}", response_model=SentimentResponse)
@@ -710,6 +768,151 @@ async def save_market_snapshot_for_symbol(symbol: str):
                     )
     except Exception:
         pass
+
+
+async def compute_market_sentiment() -> dict:
+    """
+    Compute market-wide sentiment from general crypto news.
+    
+    Returns dict with market sentiment metrics.
+    """
+    from collections import Counter
+    import re
+    
+    now = datetime.now(timezone.utc)
+    
+    # Fetch general market news from available sources
+    fetch_tasks = []
+    
+    if fetchers.get("telegram"):
+        fetch_tasks.append(market.fetch_market_telegram(fetchers["telegram"], limit=50))
+    if fetchers.get("cryptopanic"):
+        fetch_tasks.append(market.fetch_market_cryptopanic(fetchers["cryptopanic"], limit=100))
+    if fetchers.get("newsapi"):
+        fetch_tasks.append(market.fetch_market_newsapi(fetchers["newsapi"], limit=100))
+    if fetchers.get("reddit"):
+        fetch_tasks.append(market.fetch_market_reddit(fetchers["reddit"], limit=50))
+    
+    # Gather all results
+    all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    
+    # Collect posts
+    posts = []
+    sources_used = set()
+    for result in all_results:
+        if isinstance(result, list) and result:
+            posts.extend(result)
+            for post in result:
+                sources_used.add(post.source.split(':')[0])  # Remove channel suffix
+    
+    if not posts:
+        return {
+            "market_sentiment": 0.0,
+            "score_positive": 0.0,
+            "score_negative": 0.0,
+            "score_neutral": 1.0,
+            "mentions": 0,
+            "sources": [],
+            "regime": "neutral",
+            "fear_greed_index": 50.0,
+            "top_keywords": [],
+            "top_narratives": [],
+            "regulatory_sentiment": 0.0,
+            "institutional_sentiment": 0.0,
+            "technical_sentiment": 0.0,
+            "timestamp": now,
+        }
+    
+    # Analyze sentiment with FinBERT
+    analyzer = get_analyzer()
+    texts = [p.text for p in posts]
+    sentiments = analyzer.analyze(texts)
+    
+    # Calculate aggregate sentiment
+    total_positive = sum(s["positive"] for s in sentiments)
+    total_negative = sum(s["negative"] for s in sentiments)
+    total_neutral = sum(s["neutral"] for s in sentiments)
+    total = len(sentiments)
+    
+    avg_positive = total_positive / total
+    avg_negative = total_negative / total
+    avg_neutral = total_neutral / total
+    
+    market_sentiment = avg_positive - avg_negative
+    
+    # Calculate Fear & Greed Index (0-100 scale)
+    # Based on sentiment, with adjustments for volatility/uncertainty
+    base_score = (market_sentiment + 1) * 50  # Map -1 to 1 → 0 to 100
+    
+    # Adjust for neutral sentiment (high neutral = uncertainty = fear)
+    uncertainty_penalty = avg_neutral * 20
+    fear_greed_index = max(0, min(100, base_score - uncertainty_penalty))
+    
+    # Determine regime
+    if fear_greed_index < 20:
+        regime = "extreme_fear"
+    elif fear_greed_index < 40:
+        regime = "fear"
+    elif fear_greed_index < 60:
+        regime = "neutral"
+    elif fear_greed_index < 80:
+        regime = "greed"
+    else:
+        regime = "extreme_greed"
+    
+    # Extract keywords (simple word frequency)
+    all_text = " ".join(texts).lower()
+    # Remove common words and extract meaningful keywords
+    words = re.findall(r'\b[a-z]{4,}\b', all_text)
+    common_words = {'that', 'this', 'with', 'from', 'will', 'have', 'been', 'were', 'said', 'their', 'would', 'about', 'more', 'other', 'which', 'when', 'what', 'than', 'them', 'some', 'into', 'only', 'also', 'even', 'well', 'much', 'just'}
+    meaningful_words = [w for w in words if w not in common_words]
+    
+    word_counts = Counter(meaningful_words)
+    top_keywords = word_counts.most_common(10)
+    
+    # Extract narratives (based on common keyword patterns)
+    narratives = []
+    narrative_patterns = {
+        "regulation": ["regulation", "regulatory", "sec", "cftc", "regulator"],
+        "institutional": ["institutional", "etf", "fund", "investment", "bank"],
+        "technical": ["upgrade", "update", "launch", "development", "technical"],
+        "adoption": ["adoption", "acceptance", "mainstream", "integration"],
+        "defi": ["defi", "decentralized", "protocol", "yield", "liquidity"],
+    }
+    
+    for narrative, keywords in narrative_patterns.items():
+        if any(kw in all_text for kw in keywords):
+            narratives.append(narrative)
+    
+    # Calculate category-specific sentiment
+    def calculate_category_sentiment(keywords: list[str]) -> float:
+        category_sentiments = []
+        for post, sent in zip(posts, sentiments):
+            if any(kw in post.text.lower() for kw in keywords):
+                score = sent["positive"] - sent["negative"]
+                category_sentiments.append(score)
+        return statistics.mean(category_sentiments) if category_sentiments else 0.0
+    
+    regulatory_sentiment = calculate_category_sentiment(narrative_patterns["regulation"])
+    institutional_sentiment = calculate_category_sentiment(narrative_patterns["institutional"])
+    technical_sentiment = calculate_category_sentiment(narrative_patterns["technical"])
+    
+    return {
+        "market_sentiment": market_sentiment,
+        "score_positive": avg_positive,
+        "score_negative": avg_negative,
+        "score_neutral": avg_neutral,
+        "mentions": len(posts),
+        "sources": sorted(list(sources_used)),
+        "regime": regime,
+        "fear_greed_index": fear_greed_index,
+        "top_keywords": top_keywords,
+        "top_narratives": narratives,
+        "regulatory_sentiment": regulatory_sentiment,
+        "institutional_sentiment": institutional_sentiment,
+        "technical_sentiment": technical_sentiment,
+        "timestamp": now,
+    }
 
 
 async def backfill_symbol_history(symbol: str, cutoff: datetime):

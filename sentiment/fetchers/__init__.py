@@ -9,6 +9,7 @@ from .newsapi import NewsAPIFetcher
 from .reddit import RedditFetcher
 from .telegram import TelegramFetcher
 from .twitter import TwitterFetcher
+from . import market
 
 __all__ = [
     "RedditFetcher",
@@ -22,4 +23,5 @@ __all__ = [
     "FMPFetcher",
     "TelegramFetcher",
     "Post",
+    "market",
 ]
