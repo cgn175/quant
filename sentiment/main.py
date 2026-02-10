@@ -31,6 +31,20 @@ from pydantic import BaseModel
 
 from models import FinBERTAnalyzer, get_analyzer
 
+# Optional Telegram listener integration
+try:
+    from telegram_integration import (
+        start_telegram_listener,
+        stop_telegram_listener,
+        is_listener_running,
+        get_listener_stats,
+    )
+    TELEGRAM_INTEGRATION_AVAILABLE = True
+except ImportError:
+    TELEGRAM_INTEGRATION_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Telegram integration not available (missing dependencies?)")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -213,6 +227,24 @@ async def health():
         return HealthResponse(status="ok", model_loaded=True)
     except Exception:
         return HealthResponse(status="degraded", model_loaded=False)
+
+
+@app.get("/telegram/status")
+async def telegram_status():
+    """Get Telegram listener status (if integrated)."""
+    if not TELEGRAM_INTEGRATION_AVAILABLE:
+        return {
+            "integrated": False,
+            "available": False,
+            "message": "Telegram integration not available"
+        }
+    
+    stats = get_listener_stats()
+    return {
+        "integrated": True,
+        "available": True,
+        **stats
+    }
 
 
 # Cache for market sentiment (separate from symbol-specific cache)
@@ -765,8 +797,33 @@ async def startup():
     asyncio.create_task(cleanup_old_data())
     asyncio.create_task(cleanup_database())
     asyncio.create_task(backfill_history_if_empty())
+    
+    # Optional: Start integrated Telegram listener
+    settings = get_settings()
+    if TELEGRAM_INTEGRATION_AVAILABLE and settings.telegram_listener_enabled:
+        logger.info("Starting integrated Telegram listener...")
+        success = await start_telegram_listener()
+        if success:
+            logger.info("✓ Telegram listener started")
+        else:
+            logger.warning("Telegram listener failed to start (see logs)")
+    
     logger.info("Sentiment server ready!")
     logger.info("=" * 60)
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Cleanup on server shutdown."""
+    logger.info("Shutting down sentiment server...")
+    
+    # Stop integrated Telegram listener if running
+    if TELEGRAM_INTEGRATION_AVAILABLE and is_listener_running():
+        logger.info("Stopping integrated Telegram listener...")
+        await stop_telegram_listener()
+    
+    logger.info("Shutdown complete")
+
 
 
 async def cleanup_old_data():

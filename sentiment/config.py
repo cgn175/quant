@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
     telegram_session_name: str = "sentiment_bot"
+    telegram_listener_enabled: bool = True  # Auto-start listener with server
 
     redis_url: str = "redis://localhost:6379"
     use_redis: bool = False
