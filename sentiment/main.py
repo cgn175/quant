@@ -239,7 +239,28 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
         analyzer = get_analyzer()
         texts = [p.text for p in posts]
         sentiments = analyzer.analyze(texts)
-        
+
+        # Persist raw predictions (best-effort)
+        try:
+            raw_preds = []
+            for post, sent in zip(posts, sentiments):
+                pred_label = max(sent, key=sent.get)
+                pred_confidence = sent[pred_label]
+                raw_preds.append({
+                    "text": post.text[:2000],
+                    "source": post.source,
+                    "fetched_at": datetime.now(timezone.utc),
+                    "published_at": post.timestamp,
+                    "pred_positive": sent["positive"],
+                    "pred_negative": sent["negative"],
+                    "pred_neutral": sent["neutral"],
+                    "pred_label": pred_label,
+                    "pred_confidence": pred_confidence,
+                })
+            await sentiment_db.save_raw_predictions(symbol, raw_preds)
+        except Exception:
+            pass  # Best-effort, don't break main flow
+
         # Calculate current aggregated score
         weighted_scores = []
         weights = []
@@ -326,6 +347,20 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/predictions/{symbol}")
+async def get_predictions(symbol: str, hours: int = 24, source: Optional[str] = None):
+    """Get raw predictions with FinBERT scores for a symbol."""
+    predictions = await sentiment_db.get_raw_predictions(symbol, hours=hours, source=source)
+    return {"symbol": symbol, "count": len(predictions), "predictions": predictions}
+
+
+@app.get("/accuracy/{symbol}")
+async def get_accuracy(symbol: str, days: int = 7):
+    """Get prediction accuracy by comparing FinBERT predictions vs actual price movement."""
+    accuracy = await sentiment_db.get_prediction_accuracy(symbol, days=days)
+    return {"symbol": symbol, "days": days, **accuracy}
 
 
 async def compute_sentiment(symbol: str) -> dict:
@@ -637,6 +672,40 @@ async def backfill_history_if_empty():
         return
 
 
+async def save_market_snapshot_for_symbol(symbol: str):
+    """Fetch current price from CoinGecko and save a market snapshot."""
+    import httpx
+
+    coin_map = {
+        "BTCUSDT": "bitcoin",
+        "ETHUSDT": "ethereum",
+        "SOLUSDT": "solana",
+        "BNBUSDT": "binancecoin",
+    }
+
+    coin_id = coin_map.get(symbol)
+    if not coin_id:
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={"ids": coin_id, "vs_currencies": "usd"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                price = data.get(coin_id, {}).get("usd")
+                if price:
+                    await sentiment_db.save_market_snapshot(
+                        symbol=symbol,
+                        timestamp=datetime.now(timezone.utc),
+                        price_close=price,
+                    )
+    except Exception:
+        pass
+
+
 async def backfill_symbol_history(symbol: str, cutoff: datetime):
     """Backfill hourly and daily sentiment for a symbol using any available posts."""
     fetch_tasks = [fetcher.fetch(symbol, limit=200) for fetcher in fetchers.values()]
@@ -654,6 +723,27 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
     analyzer = get_analyzer()
     texts = [p.text for p in posts]
     sentiments = analyzer.analyze(texts)
+
+    # Persist raw predictions (best-effort)
+    try:
+        raw_preds = []
+        for post, sent in zip(posts, sentiments):
+            pred_label = max(sent, key=sent.get)
+            pred_confidence = sent[pred_label]
+            raw_preds.append({
+                "text": post.text[:2000],
+                "source": post.source,
+                "fetched_at": datetime.now(timezone.utc),
+                "published_at": post.timestamp,
+                "pred_positive": sent["positive"],
+                "pred_negative": sent["negative"],
+                "pred_neutral": sent["neutral"],
+                "pred_label": pred_label,
+                "pred_confidence": pred_confidence,
+            })
+        await sentiment_db.save_raw_predictions(symbol, raw_preds)
+    except Exception:
+        pass  # Best-effort, don't break main flow
 
     # Collect sources
     for post in posts:
@@ -744,6 +834,12 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
             mentions_count=bucket["mentions"],
             sources=sorted(bucket["sources"]),
         )
+
+    # Save market snapshot (best-effort)
+    try:
+        await save_market_snapshot_for_symbol(symbol)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
