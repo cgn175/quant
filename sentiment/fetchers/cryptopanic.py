@@ -21,7 +21,7 @@ class CryptopanicFetcher(BaseFetcher):
             api_key: CryptoPanic API key (free tier available)
         """
         self.api_key = api_key
-        self.base_url = "https://cryptopanic.com/api/v1"
+        self.base_url = "https://cryptopanic.com/api/free/v1"
         self.timeout = httpx.Timeout(10.0)
 
     def _fetch_sync(self, symbol: str, limit: int = 100) -> list[Post]:
@@ -34,44 +34,43 @@ class CryptopanicFetcher(BaseFetcher):
 
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                for currency in currencies:
-                    params = {
-                        "auth_token": self.api_key,
-                        "currencies": currency,
-                        "kind": "news",
-                        "limit": limit,
-                    }
+                # Build single request with comma-separated currencies
+                params = {
+                    "auth_token": self.api_key,
+                    "currencies": ",".join(currencies),  # CryptoPanic accepts comma-separated values
+                    "filter": "news",  # Use 'filter' not 'kind'
+                }
 
-                    response = client.get(f"{self.base_url}/posts/", params=params)
-                    response.raise_for_status()
-                    data = response.json()
+                response = client.get(f"{self.base_url}/posts/", params=params)
+                response.raise_for_status()
+                data = response.json()
 
-                    for item in data.get("results", []):
-                        # Only include recent news (last 48 hours)
-                        posted_at = datetime.fromisoformat(
-                            item["published_at"].replace("Z", "+00:00")
+                for item in data.get("results", []):
+                    # Only include recent news (last 48 hours)
+                    posted_at = datetime.fromisoformat(
+                        item["published_at"].replace("Z", "+00:00")
+                    )
+                    if (
+                        datetime.now(timezone.utc) - posted_at
+                    ).total_seconds() > 172800:
+                        continue
+
+                    title = item.get("title", "")
+                    summary = item.get("summary", "")
+                    text = f"{title}. {summary}" if summary else title
+
+                    # Extract sentiment from title/summary
+                    sentiment_score = self._extract_sentiment(text)
+
+                    posts.append(
+                        Post(
+                            text=text[:1000],
+                            source="cryptopanic",
+                            symbol=symbol,
+                            timestamp=posted_at,
+                            score=sentiment_score,
                         )
-                        if (
-                            datetime.now(timezone.utc) - posted_at
-                        ).total_seconds() > 172800:
-                            continue
-
-                        title = item.get("title", "")
-                        summary = item.get("summary", "")
-                        text = f"{title}. {summary}" if summary else title
-
-                        # Extract sentiment from title/summary
-                        sentiment_score = self._extract_sentiment(text)
-
-                        posts.append(
-                            Post(
-                                text=text[:1000],
-                                source="cryptopanic",
-                                symbol=symbol,
-                                timestamp=posted_at,
-                                score=sentiment_score,
-                            )
-                        )
+                    )
 
         except Exception as e:
             # Silently fail

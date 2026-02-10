@@ -15,7 +15,7 @@ class FMPFetcher(BaseFetcher):
     Features: Crypto news, stock news, pagination support, sentiment indicators
     """
 
-    BASE_URL = "https://financialmodelingprep.com/stable"
+    BASE_URL = "https://financialmodelingprep.com/api/v3"
 
     def __init__(self, api_key: str = ""):
         self.api_key = api_key
@@ -45,15 +45,17 @@ class FMPFetcher(BaseFetcher):
         try:
             session = await self._get_session()
             
-            # Fetch crypto news
+            # Fetch crypto news using stock_news API with crypto tickers
+            # Note: FMP free tier doesn't have /news/crypto-latest endpoint
+            # Using /stock_news with crypto symbols as workaround
             params = {
+                "tickers": base_symbol,  # BTC, ETH, etc.
+                "limit": min(limit, 50),  # API limit
                 "apikey": self.api_key,
-                "page": 0,
-                "limit": min(limit, 20),  # Reasonable limit per request
             }
 
             async with session.get(
-                f"{self.BASE_URL}/news/crypto-latest",
+                f"{self.BASE_URL}/stock_news",
                 params=params,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
