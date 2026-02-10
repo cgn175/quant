@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import statistics
+import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -27,6 +29,17 @@ from pydantic import BaseModel
 
 from models import FinBERTAnalyzer, get_analyzer
 from insights import InsightsGenerator, InsightReport
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('sentiment_server.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Sentiment Microservice", version="1.0.0")
 
@@ -209,36 +222,47 @@ async def get_market_sentiment():
     
     Cache TTL: 5 minutes (market sentiment changes slower than symbol-specific)
     """
+    logger.info("GET /sentiment/market - Market sentiment requested")
+    
     # Check cache
     if market_sentiment_cache:
         cache_age = datetime.now(timezone.utc) - market_sentiment_cache.get("timestamp", datetime.min.replace(tzinfo=timezone.utc))
         if cache_age < timedelta(seconds=300):  # 5 minute cache
+            logger.info(f"Returning cached market sentiment (age: {cache_age.total_seconds():.1f}s)")
             return MarketSentimentResponse(**market_sentiment_cache)
     
+    logger.info("Market sentiment cache expired, fetching fresh data...")
     try:
         result = await compute_market_sentiment()
         market_sentiment_cache.clear()
         market_sentiment_cache.update(result)
+        logger.info(f"Market sentiment computed: regime={result['regime']}, score={result['market_sentiment']:.3f}, mentions={result['mentions']}")
         return MarketSentimentResponse(**result)
     except Exception as e:
+        logger.error(f"Error computing market sentiment: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/sentiment/{symbol}", response_model=SentimentResponse)
 async def get_sentiment(symbol: str):
     symbol = symbol.upper()
+    logger.info(f"GET /sentiment/{symbol} - Sentiment requested")
 
     if symbol in sentiment_cache:
         cached = sentiment_cache[symbol]
         cache_age = datetime.now(timezone.utc) - cached["timestamp"]
         if cache_age < timedelta(seconds=get_settings().sentiment_update_interval):
+            logger.info(f"Returning cached sentiment for {symbol} (age: {cache_age.total_seconds():.1f}s)")
             return SentimentResponse(**cached)
 
+    logger.info(f"Cache expired for {symbol}, computing fresh sentiment...")
     try:
         result = await compute_sentiment(symbol)
         sentiment_cache[symbol] = result
+        logger.info(f"Sentiment computed for {symbol}: score_1h={result['score_1h']:.3f}, mentions={result['mentions']}")
         return SentimentResponse(**result)
     except Exception as e:
+        logger.error(f"Error computing sentiment for {symbol}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -441,8 +465,10 @@ async def get_accuracy(symbol: str, days: int = 7):
 async def compute_sentiment(symbol: str) -> dict:
     """Compute sentiment from multiple sources and persist to database."""
     now = datetime.now(timezone.utc)
+    logger.info(f"Computing sentiment for {symbol}...")
 
     # Fetch from all available sources in parallel
+    logger.info(f"Fetching from {len(fetchers)} sources: {', '.join(fetchers.keys())}")
     fetch_tasks = [fetcher.fetch(symbol, limit=50) for fetcher in fetchers.values()]
     all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
@@ -450,11 +476,17 @@ async def compute_sentiment(symbol: str) -> dict:
     posts = []
     sources_used = []
     for fetcher_name, result in zip(fetchers.keys(), all_results):
-        if isinstance(result, list) and result:
+        if isinstance(result, Exception):
+            logger.warning(f"Fetcher '{fetcher_name}' failed: {result}")
+        elif isinstance(result, list) and result:
             posts.extend(result)
             sources_used.append(fetcher_name)
+            logger.info(f"Fetcher '{fetcher_name}' returned {len(result)} posts")
+        else:
+            logger.debug(f"Fetcher '{fetcher_name}' returned no posts")
 
     if not posts:
+        logger.warning(f"No posts found for {symbol} from any source")
         return {
             "symbol": symbol,
             "score_1h": 0.0,
@@ -466,9 +498,11 @@ async def compute_sentiment(symbol: str) -> dict:
             "timestamp": now,
         }
 
+    logger.info(f"Analyzing {len(posts)} posts with FinBERT for {symbol}...")
     analyzer = get_analyzer()
     texts = [p.text for p in posts]
     sentiments = analyzer.analyze(texts)
+    logger.info(f"FinBERT analysis complete for {symbol}")
 
     hour_ago = now - timedelta(hours=1)
     day_ago = now - timedelta(hours=24)
@@ -700,10 +734,20 @@ async def compute_velocity_from_db(symbol: str) -> float:
 
 @app.on_event("startup")
 async def startup():
+    logger.info("=" * 60)
+    logger.info("Starting Sentiment Microservice")
+    logger.info("=" * 60)
+    logger.info("Initializing FinBERT model...")
     get_analyzer()
+    logger.info("FinBERT model loaded successfully")
+    
+    logger.info(f"Configured fetchers: {', '.join(fetchers.keys())}")
+    logger.info("Starting background tasks...")
     asyncio.create_task(cleanup_old_data())
     asyncio.create_task(cleanup_database())
     asyncio.create_task(backfill_history_if_empty())
+    logger.info("Sentiment server ready!")
+    logger.info("=" * 60)
 
 
 async def cleanup_old_data():
@@ -797,12 +841,16 @@ async def compute_market_sentiment() -> dict:
     
     if fetchers.get("telegram"):
         fetch_tasks.append(market.fetch_market_telegram(fetchers["telegram"], limit=50))
+        logger.info("Fetching general market news from Telegram...")
     if fetchers.get("cryptopanic"):
         fetch_tasks.append(market.fetch_market_cryptopanic(fetchers["cryptopanic"], limit=100))
+        logger.info("Fetching general market news from CryptoPanic...")
     if fetchers.get("newsapi"):
         fetch_tasks.append(market.fetch_market_newsapi(fetchers["newsapi"], limit=100))
+        logger.info("Fetching general market news from NewsAPI...")
     if fetchers.get("reddit"):
         fetch_tasks.append(market.fetch_market_reddit(fetchers["reddit"], limit=50))
+        logger.info("Fetching general market news from Reddit...")
     
     # Gather all results
     all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
@@ -810,13 +858,19 @@ async def compute_market_sentiment() -> dict:
     # Collect posts
     posts = []
     sources_used = set()
-    for result in all_results:
-        if isinstance(result, list) and result:
+    for i, result in enumerate(all_results):
+        if isinstance(result, Exception):
+            logger.warning(f"Market fetcher {i} failed: {result}")
+        elif isinstance(result, list) and result:
             posts.extend(result)
             for post in result:
                 sources_used.add(post.source.split(':')[0])  # Remove channel suffix
+            logger.info(f"Market fetcher {i} returned {len(result)} posts")
+    
+    logger.info(f"Total market posts collected: {len(posts)} from {len(sources_used)} sources")
     
     if not posts:
+        logger.warning("No market posts found from any source")
         return {
             "market_sentiment": 0.0,
             "score_positive": 0.0,
@@ -835,9 +889,11 @@ async def compute_market_sentiment() -> dict:
         }
     
     # Analyze sentiment with FinBERT
+    logger.info(f"Analyzing {len(posts)} market posts with FinBERT...")
     analyzer = get_analyzer()
     texts = [p.text for p in posts]
     sentiments = analyzer.analyze(texts)
+    logger.info("Market sentiment FinBERT analysis complete")
     
     # Calculate aggregate sentiment
     total_positive = sum(s["positive"] for s in sentiments)
