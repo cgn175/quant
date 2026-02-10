@@ -155,8 +155,19 @@ class TelegramListener:
 
             # Join/resolve channels and collect their IDs
             logger.info("Resolving channel entities...")
-            await self._resolve_channels()
-
+            try:
+                await asyncio.wait_for(
+                    self._resolve_channels(),
+                    timeout=180.0  # 3 minute timeout for all channels
+                )
+            except asyncio.TimeoutError:
+                logger.error("Channel resolution timed out after 3 minutes!")
+                if not self.channel_ids:
+                    logger.error("No channels resolved, cannot continue")
+                    await self.client.disconnect()
+                    return
+                logger.warning(f"Continuing with {len(self.channel_ids)} resolved channels...")
+            
             if not self.channel_ids:
                 logger.error("No valid channels found!")
                 await self.client.disconnect()
@@ -198,10 +209,16 @@ class TelegramListener:
     async def _resolve_channels(self):
         """Resolve channel entities and collect their IDs."""
         self.channel_ids.clear()
+        logger.info(f"Attempting to resolve {len(self.channels)} channels...")
 
-        for channel_username in self.channels:
+        for i, channel_username in enumerate(self.channels, 1):
+            logger.info(f"  [{i}/{len(self.channels)}] Resolving @{channel_username}...")
             try:
-                entity = await self.client.get_entity(channel_username)
+                # Add timeout to prevent hanging
+                entity = await asyncio.wait_for(
+                    self.client.get_entity(channel_username),
+                    timeout=15.0  # 15 second timeout per channel
+                )
 
                 if isinstance(entity, Channel):
                     self.channel_ids.add(entity.id)
@@ -209,6 +226,8 @@ class TelegramListener:
                 else:
                     logger.warning(f"  ✗ {channel_username} is not a channel")
 
+            except asyncio.TimeoutError:
+                logger.error(f"  ✗ {channel_username}: Timeout after 15s (skipping)")
             except ChannelPrivateError:
                 logger.error(
                     f"  ✗ {channel_username}: Channel is private or doesn't exist"
@@ -217,8 +236,14 @@ class TelegramListener:
                 logger.error(f"  ✗ {channel_username}: Admin rights required")
             except FloodWaitError as e:
                 logger.error(f"  ✗ {channel_username}: FloodWait {e.seconds}s")
+                # Wait if FloodWait is short
+                if e.seconds < 60:
+                    logger.info(f"  Waiting {e.seconds}s due to FloodWait...")
+                    await asyncio.sleep(e.seconds)
             except Exception as e:
                 logger.error(f"  ✗ {channel_username}: {type(e).__name__}: {e}")
+        
+        logger.info(f"Successfully resolved {len(self.channel_ids)} out of {len(self.channels)} channels")
 
     def _register_event_handlers(self):
         """Register event handlers for new messages."""
