@@ -51,12 +51,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHANNELS = [
     "cointelegraph",  # CoinTelegraph official
     "crypto",  # Crypto.com News
-    "bitcoinmagazine",  # Bitcoin Magazine
     "binance_announcements",  # Binance Official Announcements
     "coindesk",  # CoinDesk
     "the_block_crypto",
     "wublockchainenglish",
     "CTMarkets",  # Market-specific updates from Cointelegraph
+    ### global finance news ###
+    "Bloomberg",
+    "TheFinancialExpressOnline",
+    "CNBCinternational",
+    "statista",
 ]
 
 KEEP_ALIVE_INTERVAL = 30  # seconds
@@ -142,7 +146,7 @@ class TelegramListener:
             try:
                 await asyncio.wait_for(
                     self.client.connect(),
-                    timeout=45.0  # 45 second timeout for connection
+                    timeout=45.0,  # 45 second timeout for connection
                 )
                 logger.info("Connection established")
             except asyncio.TimeoutError:
@@ -154,14 +158,14 @@ class TelegramListener:
             try:
                 is_authorized = await asyncio.wait_for(
                     self.client.is_user_authorized(),
-                    timeout=30.0  # 30 second timeout for auth check
+                    timeout=30.0,  # 30 second timeout for auth check
                 )
                 logger.info(f"Authorization check complete: {is_authorized}")
             except asyncio.TimeoutError:
                 logger.error("Authorization check timeout after 30 seconds!")
                 await self.client.disconnect()
                 return
-            
+
             if not is_authorized:
                 logger.error("Telegram session not authorized!")
                 logger.error("Run setup_telegram.py first to authenticate")
@@ -179,7 +183,7 @@ class TelegramListener:
             try:
                 await asyncio.wait_for(
                     self._resolve_channels(),
-                    timeout=180.0  # 3 minute timeout for all channels
+                    timeout=180.0,  # 3 minute timeout for all channels
                 )
             except asyncio.TimeoutError:
                 logger.error("Channel resolution timed out after 3 minutes!")
@@ -187,8 +191,10 @@ class TelegramListener:
                     logger.error("No channels resolved, cannot continue")
                     await self.client.disconnect()
                     return
-                logger.warning(f"Continuing with {len(self.channel_ids)} resolved channels...")
-            
+                logger.warning(
+                    f"Continuing with {len(self.channel_ids)} resolved channels..."
+                )
+
             if not self.channel_ids:
                 logger.error("No valid channels found!")
                 await self.client.disconnect()
@@ -233,12 +239,14 @@ class TelegramListener:
         logger.info(f"Attempting to resolve {len(self.channels)} channels...")
 
         for i, channel_username in enumerate(self.channels, 1):
-            logger.info(f"  [{i}/{len(self.channels)}] Resolving @{channel_username}...")
+            logger.info(
+                f"  [{i}/{len(self.channels)}] Resolving @{channel_username}..."
+            )
             try:
                 # Add timeout to prevent hanging
                 entity = await asyncio.wait_for(
                     self.client.get_entity(channel_username),
-                    timeout=15.0  # 15 second timeout per channel
+                    timeout=15.0,  # 15 second timeout per channel
                 )
 
                 if isinstance(entity, Channel):
@@ -263,8 +271,10 @@ class TelegramListener:
                     await asyncio.sleep(e.seconds)
             except Exception as e:
                 logger.error(f"  ✗ {channel_username}: {type(e).__name__}: {e}")
-        
-        logger.info(f"Successfully resolved {len(self.channel_ids)} out of {len(self.channels)} channels")
+
+        logger.info(
+            f"Successfully resolved {len(self.channel_ids)} out of {len(self.channels)} channels"
+        )
 
     def _register_event_handlers(self):
         """Register event handlers for new messages."""
@@ -394,7 +404,7 @@ async def main():
 
     # Setup signal handlers for graceful shutdown
     loop = asyncio.get_event_loop()
-    
+
     def signal_handler(sig):
         logger.info(f"Received signal {sig.name}, initiating shutdown...")
         listener.running = False

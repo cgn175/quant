@@ -22,11 +22,15 @@ GENERAL_CRYPTO_KEYWORDS = [
 
 async def fetch_market_telegram(fetcher, limit: int = 50) -> List[Post]:
     """
-    Fetch general crypto news from Telegram channels without symbol filtering.
+    Fetch general crypto news from Telegram messages in database.
+    
+    The new TelegramFetcher reads from telegram_messages table populated
+    by the telegram_listener.py service. This function fetches all unprocessed
+    crypto-related messages regardless of symbol.
     
     Args:
-        fetcher: TelegramFetcher instance
-        limit: Max messages per channel
+        fetcher: TelegramFetcher instance (database-backed)
+        limit: Max messages to fetch
         
     Returns:
         List of Post objects with symbol="MARKET"
@@ -36,65 +40,42 @@ async def fetch_market_telegram(fetcher, limit: int = 50) -> List[Post]:
     if not isinstance(fetcher, TelegramFetcher):
         return []
     
-    if not fetcher.client:
-        await fetcher._init_client()
+    # Get unprocessed messages from database
+    messages = await fetcher.db.get_unprocessed_telegram_messages(limit=limit * 2)
     
-    if not fetcher.client:
+    if not messages:
         return []
     
     all_posts = []
     
-    for channel in fetcher.channels:
-        try:
-            # Rate limit
-            await fetcher.rate_limiter.acquire()
-            
-            # Get channel entity
-            channel_entity = await fetcher._exponential_backoff_retry(
-                fetcher.client.get_entity,
-                channel
-            )
-            
-            # Fetch messages
-            messages = await fetcher._exponential_backoff_retry(
-                fetcher.client.get_messages,
-                channel_entity,
-                limit=limit
-            )
-            
-            for message in messages:
-                if not message.text:
-                    continue
-                
-                # Check if message is crypto-related (general filter)
-                text_lower = message.text.lower()
-                is_crypto = any(kw in text_lower for kw in GENERAL_CRYPTO_KEYWORDS)
-                
-                if not is_crypto:
-                    continue
-                
-                # Check deduplication cache
-                async with fetcher._cache_lock:
-                    if message.id in fetcher._message_cache:
-                        continue
-                    fetcher._message_cache.add(message.id)
-                
-                # Extract sentiment score
-                score = fetcher._extract_sentiment_score(message.text)
-                
-                all_posts.append(
-                    Post(
-                        text=message.text[:1000],
-                        source=f"telegram:{channel}",
-                        symbol="MARKET",  # Special symbol for market-wide news
-                        timestamp=message.date.replace(tzinfo=__import__('datetime').timezone.utc),
-                        score=score,
-                    )
-                )
+    for msg in messages:
+        text_lower = msg['text'].lower()
         
-        except Exception as e:
-            print(f"Error fetching market news from {channel}: {e}")
+        # Check if message is crypto-related (general filter)
+        is_crypto = any(kw in text_lower for kw in GENERAL_CRYPTO_KEYWORDS)
+        
+        if not is_crypto:
             continue
+        
+        # Extract sentiment score
+        score = fetcher._extract_sentiment_score(msg['text'])
+        
+        # Convert timestamp
+        from datetime import datetime, timezone
+        timestamp = datetime.fromtimestamp(msg['timestamp'], tz=timezone.utc)
+        
+        all_posts.append(
+            Post(
+                text=msg['text'][:1000],
+                source=f"telegram:{msg['channel_username']}",
+                symbol="MARKET",  # Special symbol for market-wide news
+                timestamp=timestamp,
+                score=score,
+            )
+        )
+        
+        # Mark as processed
+        await fetcher.db.mark_telegram_message_processed(msg['id'])
     
     return all_posts
 
