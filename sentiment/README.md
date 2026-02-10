@@ -4,12 +4,14 @@ Market sentiment analysis microservice for the crypto trading bot. Aggregates se
 
 ## Features
 
-- **Multi-source sentiment aggregation**: Reddit, Twitter/X, CoinGecko, CryptoPanic, NewsAPI
+- **Multi-source sentiment aggregation**: Reddit, Twitter/X, CoinGecko, CryptoPanic, NewsAPI, Telegram channels
 - **FinBERT-based sentiment analysis**: Fine-tuned BERT model for financial sentiment
 - **Persistent storage**: SQLite database for hourly and daily sentiment history
 - **Telegram integration**: Sends sentiment summaries twice daily (8 AM and 4 PM UTC)
+- **Telegram channel monitoring**: Real-time crypto news from major Telegram channels (NEW)
 - **Historical data endpoints**: Query sentiment trends over time
 - **Per-source breakdown**: Track which sources are driving sentiment
+- **Flood-resistant**: Exponential backoff retry logic for Telegram rate limits
 
 ## Quick Start
 
@@ -183,6 +185,15 @@ Health check endpoint.
 - **Scoring**: Tweet engagement (likes, retweets, replies)
 - **Note**: Requires API v2 paid tier (not included by default)
 
+### Telegram Channels (Free - NEW!)
+- **Data**: Real-time messages from public crypto news channels
+- **Channels**: CoinTelegraph, Binance Announcements, Bitcoin Magazine, CoinDesk, and more
+- **Scoring**: Keyword-based sentiment extraction
+- **Security**: Secure MTProto connection with session authentication
+- **Requires**: Telegram API credentials (free from https://my.telegram.org/apps)
+- **Rate limiting**: Built-in flood protection with exponential backoff
+- **Setup guide**: See `docs/TELEGRAM_FETCHER.md`
+
 ## Sentiment Calculation
 
 For each data source, the FinBERT model computes three probabilities:
@@ -241,6 +252,8 @@ SENTIMENT_TWITTER_BEARER_TOKEN=...
 SENTIMENT_COINGECKO_API_KEY=...
 SENTIMENT_CRYPTOPANIC_API_KEY=...
 SENTIMENT_NEWSAPI_KEY=...
+SENTIMENT_TELEGRAM_API_ID=...
+SENTIMENT_TELEGRAM_API_HASH=...
 SENTIMENT_UPDATE_INTERVAL=60
 SENTIMENT_HISTORY_HOURS=24
 SENTIMENT_MODEL_NAME=ProsusAI/finbert

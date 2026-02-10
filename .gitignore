@@ -63,6 +63,12 @@ backtest_results/
 # Sentiment model cache (downloaded by transformers)
 sentiment/models/finbert-cache/
 
+# Telegram session files (contain authentication data)
+sentiment/.telegram_sessions/
+.telegram_sessions/
+*.session
+*.session-journal
+
 # Docker
 docker-compose.override.yaml
 

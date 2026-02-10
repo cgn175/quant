@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     marketaux_api_key: str = ""
     finnhub_api_key: str = ""
     fmp_api_key: str = ""
+    
+    # Telegram API credentials (get from https://my.telegram.org/apps)
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
+    telegram_session_name: str = "sentiment_bot"
 
     redis_url: str = "redis://localhost:6379"
     use_redis: bool = False

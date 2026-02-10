@@ -7,6 +7,7 @@ from .fmp import FMPFetcher
 from .marketaux import MarketauxFetcher
 from .newsapi import NewsAPIFetcher
 from .reddit import RedditFetcher
+from .telegram import TelegramFetcher
 from .twitter import TwitterFetcher
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "MarketauxFetcher",
     "FinnhubFetcher",
     "FMPFetcher",
+    "TelegramFetcher",
     "Post",
 ]
