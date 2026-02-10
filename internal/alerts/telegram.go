@@ -296,27 +296,46 @@ func (m *Manager) handleMarketsNewsCommand(msg *tgbotapi.Message) {
 				}
 
 				// Extract data
-				score24h, _ := sentimentData["score_24h"].(float64)
-				mentions, _ := sentimentData["mentions"].(int)
-				velocity, _ := sentimentData["velocity"].(float64)
+				reasoning, _ := sentimentData["reasoning"].([]string)
+				suggestedAction, _ := sentimentData["suggested_action"].(string)
+				signal, _ := sentimentData["signal"].(string)
 				sources, _ := sentimentData["sources"].([]string)
 
-				// Determine emoji based on score
+				// Determine emoji based on signal
 				emoji := "➡️"
-				if score24h > 0.3 {
+				switch signal {
+				case "strong_bullish":
+					emoji = "🚀"
+				case "bullish":
 					emoji = "📈"
-				} else if score24h < -0.3 {
+				case "strong_bearish":
 					emoji = "📉"
+				case "bearish":
+					emoji = "⬇️"
+				case "mixed":
+					emoji = "🔀"
+				default:
+					emoji = "➡️"
 				}
 
-				sourcesStr := "reddit"
-				if len(sources) > 0 {
-					sourcesStr = strings.Join(sources, ", ")
-				}
-
-				symbolLine := fmt.Sprintf("%s *%s*\n  Score: %.2f | Mentions: %d | Velocity: %.2f\n  Sources: %s",
-					emoji, symbol, score24h, mentions, velocity, sourcesStr)
+				// Build symbol section
+				symbolLine := fmt.Sprintf("%s *%s* \\- %s", emoji, symbol, escapeMarkdownV2(suggestedAction))
 				lines = append(lines, symbolLine)
+
+				// Add reasoning (escaped for markdown)
+				if len(reasoning) > 0 {
+					for _, reason := range reasoning {
+						lines = append(lines, fmt.Sprintf("  • %s", escapeMarkdownV2(reason)))
+					}
+				}
+
+				// Add sources
+				if len(sources) > 0 {
+					sourcesStr := strings.Join(sources, ", ")
+					lines = append(lines, fmt.Sprintf("  _Sources: %s_", escapeMarkdownV2(sourcesStr)))
+				}
+
+				lines = append(lines, "") // Empty line between symbols
 			}
 
 			lines = append(lines, fmt.Sprintf("\n⏰ Updated: %s UTC", time.Now().UTC().Format("15:04")))
