@@ -7,6 +7,8 @@ from typing import Optional
 from config import get_settings
 from db import SentimentDB
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fetchers import (
     CoinGeckoFetcher,
     CoinMarketCapFetcher,
@@ -27,6 +29,9 @@ from models import FinBERTAnalyzer, get_analyzer
 from insights import InsightsGenerator, InsightReport
 
 app = FastAPI(title="Sentiment Microservice", version="1.0.0")
+
+# Mount dashboard static files
+app.mount("/dashboard", StaticFiles(directory="dashboard", html=True), name="dashboard")
 
 sentiment_cache: dict[str, dict] = {}
 post_history: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
@@ -172,6 +177,12 @@ class MarketSentimentResponse(BaseModel):
     technical_sentiment: float  # Sentiment of technical/development news
     
     timestamp: datetime
+
+
+@app.get("/")
+async def root():
+    """Redirect root to dashboard."""
+    return FileResponse("dashboard/index.html")
 
 
 @app.get("/health", response_model=HealthResponse)

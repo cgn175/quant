@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Sentiment Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            color: #667eea;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        label {
+            font-weight: 600;
+            color: #555;
+        }
+        
+        select, button {
+            padding: 10px 15px;
+            border: 2px solid #667eea;
+            border-radius: 5px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        select {
+            background: white;
+            color: #333;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            font-weight: 600;
+        }
+        
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .stats {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        
+        .stat-card {
+            text-align: center;
+            padding: 15px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .news-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 20px;
+        }
+        
+        .news-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .news-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 12px rgba(0,0,0,0.15);
+        }
+        
+        .news-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .source-badge {
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .source-reddit { background: #FF4500; color: white; }
+        .source-telegram { background: #0088cc; color: white; }
+        .source-cryptopanic { background: #1e88e5; color: white; }
+        .source-newsapi { background: #42a5f5; color: white; }
+        .source-twitter { background: #1DA1F2; color: white; }
+        .source-coingecko { background: #8dc63f; color: white; }
+        
+        .timestamp {
+            font-size: 0.85em;
+            color: #888;
+        }
+        
+        .news-text {
+            font-size: 1em;
+            line-height: 1.6;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .sentiment-scores {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .score-item {
+            text-align: center;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        .score-positive {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .score-negative {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .score-neutral {
+            background: #e2e3e5;
+            border: 1px solid #d6d8db;
+        }
+        
+        .score-label {
+            font-size: 0.8em;
+            color: #666;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .score-value {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+        
+        .prediction {
+            text-align: center;
+            padding: 15px;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+        
+        .pred-positive {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+        }
+        
+        .pred-negative {
+            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+            color: white;
+        }
+        
+        .pred-neutral {
+            background: linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%);
+            color: white;
+        }
+        
+        .confidence {
+            font-size: 0.85em;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border: 1px solid #f5c6cb;
+        }
+        
+        @media (max-width: 768px) {
+            .news-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .control-group {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Crypto Sentiment Dashboard</h1>
+            <p class="subtitle">Real-time sentiment analysis from multiple sources</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="symbol">Symbol:</label>
+                <select id="symbol">
+                    <option value="BTCUSDT">BTC</option>
+                    <option value="ETHUSDT">ETH</option>
+                    <option value="SOLUSDT">SOL</option>
+                    <option value="BNBUSDT">BNB</option>
+                    <option value="MARKET">MARKET (All Crypto)</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="count">News per source:</label>
+                <select id="count">
+                    <option value="5">5</option>
+                    <option value="10" selected>10</option>
+                    <option value="15">15</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="hours">Time range:</label>
+                <select id="hours">
+                    <option value="6">Last 6 hours</option>
+                    <option value="12">Last 12 hours</option>
+                    <option value="24" selected>Last 24 hours</option>
+                    <option value="48">Last 48 hours</option>
+                </select>
+            </div>
+            
+            <button id="refresh-btn" onclick="loadData()">🔄 Refresh</button>
+        </div>
+        
+        <div id="stats" class="stats" style="display: none;"></div>
+        
+        <div id="loading" class="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Loading sentiment data...</p>
+        </div>
+        
+        <div id="error" class="error" style="display: none;"></div>
+        
+        <div id="news-container" class="news-grid"></div>
+    </div>
+    
+    <script>
+        const API_URL = 'http://localhost:8000';
+        
+        async function loadData() {
+            const symbol = document.getElementById('symbol').value;
+            const count = parseInt(document.getElementById('count').value);
+            const hours = parseInt(document.getElementById('hours').value);
+            
+            // Show loading
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('news-container').innerHTML = '';
+            document.getElementById('stats').style.display = 'none';
+            document.getElementById('refresh-btn').disabled = true;
+            
+            try {
+                // Fetch predictions (raw news with FinBERT scores)
+                const response = await fetch(`${API_URL}/predictions/${symbol}?hours=${hours}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (!data.predictions || data.predictions.length === 0) {
+                    throw new Error('No news data available for this symbol/timeframe');
+                }
+                
+                // Display stats
+                displayStats(data);
+                
+                // Group by source
+                const bySource = {};
+                data.predictions.forEach(pred => {
+                    const source = pred.source;
+                    if (!bySource[source]) {
+                        bySource[source] = [];
+                    }
+                    bySource[source].push(pred);
+                });
+                
+                // Sort each source by confidence and take top N
+                const newsContainer = document.getElementById('news-container');
+                
+                Object.keys(bySource).sort().forEach(source => {
+                    const items = bySource[source]
+                        .sort((a, b) => b.pred_confidence - a.pred_confidence)
+                        .slice(0, count);
+                    
+                    items.forEach(item => {
+                        newsContainer.appendChild(createNewsCard(item));
+                    });
+                });
+                
+            } catch (error) {
+                document.getElementById('error').textContent = `Error: ${error.message}`;
+                document.getElementById('error').style.display = 'block';
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('refresh-btn').disabled = false;
+            }
+        }
+        
+        function displayStats(data) {
+            const statsDiv = document.getElementById('stats');
+            statsDiv.style.display = 'grid';
+            
+            const predictions = data.predictions;
+            const totalCount = predictions.length;
+            
+            // Count by prediction
+            const positive = predictions.filter(p => p.pred_label === 'positive').length;
+            const negative = predictions.filter(p => p.pred_label === 'negative').length;
+            const neutral = predictions.filter(p => p.pred_label === 'neutral').length;
+            
+            // Count sources
+            const sources = new Set(predictions.map(p => p.source)).size;
+            
+            statsDiv.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${totalCount}</div>
+                    <div class="stat-label">Total News</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${positive}</div>
+                    <div class="stat-label">Positive (${(positive/totalCount*100).toFixed(1)}%)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${negative}</div>
+                    <div class="stat-label">Negative (${(negative/totalCount*100).toFixed(1)}%)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${neutral}</div>
+                    <div class="stat-label">Neutral (${(neutral/totalCount*100).toFixed(1)}%)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${sources}</div>
+                    <div class="stat-label">Active Sources</div>
+                </div>
+            `;
+        }
+        
+        function createNewsCard(item) {
+            const card = document.createElement('div');
+            card.className = 'news-card';
+            
+            const sourceClass = `source-${item.source.split(':')[0]}`;
+            const predClass = `pred-${item.pred_label}`;
+            
+            const timestamp = new Date(item.published_at).toLocaleString();
+            
+            card.innerHTML = `
+                <div class="news-header">
+                    <span class="source-badge ${sourceClass}">${item.source}</span>
+                    <span class="timestamp">${timestamp}</span>
+                </div>
+                
+                <div class="news-text">
+                    ${escapeHtml(item.text)}
+                </div>
+                
+                <div class="sentiment-scores">
+                    <div class="score-item score-positive">
+                        <div class="score-label">Positive</div>
+                        <div class="score-value">${(item.pred_positive * 100).toFixed(1)}%</div>
+                    </div>
+                    <div class="score-item score-negative">
+                        <div class="score-label">Negative</div>
+                        <div class="score-value">${(item.pred_negative * 100).toFixed(1)}%</div>
+                    </div>
+                    <div class="score-item score-neutral">
+                        <div class="score-label">Neutral</div>
+                        <div class="score-value">${(item.pred_neutral * 100).toFixed(1)}%</div>
+                    </div>
+                </div>
+                
+                <div class="prediction ${predClass}">
+                    ${item.pred_label.toUpperCase()}
+                    <div class="confidence">Confidence: ${(item.pred_confidence * 100).toFixed(1)}%</div>
+                </div>
+            `;
+            
+            return card;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Auto-load on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            loadData();
+        });
+        
+        // Auto-refresh every 5 minutes
+        setInterval(() => {
+            loadData();
+        }, 300000);
+    </script>
+</body>
+</html>
