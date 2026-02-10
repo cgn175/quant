@@ -503,6 +503,63 @@ async def get_predictions(symbol: str, hours: int = 24, source: Optional[str] = 
     return {"symbol": symbol, "count": len(predictions), "predictions": predictions}
 
 
+@app.get("/posts/{symbol}")
+async def get_posts(symbol: str, limit: int = 200):
+    """Get all fetched posts for a symbol, with predictions if available."""
+    # Fetch fresh posts from FetcherManager
+    posts = await fetcher_manager.fetch_for_symbol(symbol, limit=limit)
+    
+    # Get existing predictions from database (last 24 hours)
+    predictions = await sentiment_db.get_raw_predictions(symbol, hours=24)
+    
+    # Create a lookup map of predictions by (text, source)
+    pred_map = {}
+    for pred in predictions:
+        key = (pred["text"], pred["source"])
+        pred_map[key] = pred
+    
+    # Combine posts with predictions
+    result = []
+    for post in posts:
+        key = (post.text, post.source)
+        
+        if key in pred_map:
+            # Post has prediction - use it
+            pred = pred_map[key]
+            result.append({
+                "id": pred.get("id"),
+                "symbol": post.symbol,
+                "text": post.text,
+                "source": post.source,
+                "fetched_at": post.timestamp,
+                "published_at": post.published_at or post.timestamp,
+                "pred_positive": pred["pred_positive"],
+                "pred_negative": pred["pred_negative"],
+                "pred_neutral": pred["pred_neutral"],
+                "pred_label": pred["pred_label"],
+                "pred_confidence": pred["pred_confidence"],
+                "has_prediction": True
+            })
+        else:
+            # Post doesn't have prediction yet - show without it
+            result.append({
+                "id": None,
+                "symbol": post.symbol,
+                "text": post.text,
+                "source": post.source,
+                "fetched_at": post.timestamp,
+                "published_at": post.published_at or post.timestamp,
+                "pred_positive": None,
+                "pred_negative": None,
+                "pred_neutral": None,
+                "pred_label": None,
+                "pred_confidence": None,
+                "has_prediction": False
+            })
+    
+    return {"symbol": symbol, "count": len(result), "posts": result}
+
+
 @app.get("/accuracy/{symbol}")
 async def get_accuracy(symbol: str, days: int = 7):
     """Get prediction accuracy by comparing FinBERT predictions vs actual price movement."""

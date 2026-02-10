@@ -328,8 +328,10 @@
                 <label for="count">News per source:</label>
                 <select id="count">
                     <option value="5">5</option>
-                    <option value="10" selected>10</option>
+                    <option value="10">10</option>
                     <option value="15">15</option>
+                    <option value="50">50</option>
+                    <option value="9999" selected>All</option>
                 </select>
             </div>
             
@@ -374,8 +376,8 @@
             document.getElementById('refresh-btn').disabled = true;
             
             try {
-                // Fetch predictions (raw news with FinBERT scores)
-                const response = await fetch(`${API_URL}/predictions/${symbol}?hours=${hours}`);
+                // Fetch all posts (with predictions if available)
+                const response = await fetch(`${API_URL}/posts/${symbol}?limit=200`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -383,29 +385,39 @@
                 
                 const data = await response.json();
                 
-                if (!data.predictions || data.predictions.length === 0) {
+                if (!data.posts || data.posts.length === 0) {
                     throw new Error('No news data available for this symbol/timeframe');
                 }
                 
-                // Display stats
+                // Display stats (only for posts with predictions)
                 displayStats(data);
                 
                 // Group by source
                 const bySource = {};
-                data.predictions.forEach(pred => {
-                    const source = pred.source;
+                data.posts.forEach(post => {
+                    const source = post.source;
                     if (!bySource[source]) {
                         bySource[source] = [];
                     }
-                    bySource[source].push(pred);
+                    bySource[source].push(post);
                 });
                 
-                // Sort each source by confidence and take top N
+                // Sort each source by confidence (if available) or timestamp, and take top N
                 const newsContainer = document.getElementById('news-container');
                 
                 Object.keys(bySource).sort().forEach(source => {
                     const items = bySource[source]
-                        .sort((a, b) => b.pred_confidence - a.pred_confidence)
+                        .sort((a, b) => {
+                            // Sort by confidence if both have predictions
+                            if (a.has_prediction && b.has_prediction) {
+                                return b.pred_confidence - a.pred_confidence;
+                            }
+                            // Put predictions first
+                            if (a.has_prediction) return -1;
+                            if (b.has_prediction) return 1;
+                            // Otherwise sort by timestamp
+                            return new Date(b.fetched_at) - new Date(a.fetched_at);
+                        })
                         .slice(0, count);
                     
                     items.forEach(item => {
@@ -426,33 +438,41 @@
             const statsDiv = document.getElementById('stats');
             statsDiv.style.display = 'grid';
             
-            const predictions = data.predictions;
-            const totalCount = predictions.length;
+            const posts = data.posts;
+            const totalCount = posts.length;
             
-            // Count by prediction
-            const positive = predictions.filter(p => p.pred_label === 'positive').length;
-            const negative = predictions.filter(p => p.pred_label === 'negative').length;
-            const neutral = predictions.filter(p => p.pred_label === 'neutral').length;
+            // Count posts with predictions
+            const withPrediction = posts.filter(p => p.has_prediction);
+            const predictionsCount = withPrediction.length;
+            
+            // Count by prediction (only for posts with predictions)
+            const positive = withPrediction.filter(p => p.pred_label === 'positive').length;
+            const negative = withPrediction.filter(p => p.pred_label === 'negative').length;
+            const neutral = withPrediction.filter(p => p.pred_label === 'neutral').length;
             
             // Count sources
-            const sources = new Set(predictions.map(p => p.source)).size;
+            const sources = new Set(posts.map(p => p.source)).size;
             
             statsDiv.innerHTML = `
                 <div class="stat-card">
                     <div class="stat-value">${totalCount}</div>
-                    <div class="stat-label">Total News</div>
+                    <div class="stat-label">Total Posts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${predictionsCount}</div>
+                    <div class="stat-label">With Predictions (${(predictionsCount/totalCount*100).toFixed(1)}%)</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value">${positive}</div>
-                    <div class="stat-label">Positive (${(positive/totalCount*100).toFixed(1)}%)</div>
+                    <div class="stat-label">Positive (${predictionsCount > 0 ? (positive/predictionsCount*100).toFixed(1) : 0}%)</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value">${negative}</div>
-                    <div class="stat-label">Negative (${(negative/totalCount*100).toFixed(1)}%)</div>
+                    <div class="stat-label">Negative (${predictionsCount > 0 ? (negative/predictionsCount*100).toFixed(1) : 0}%)</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value">${neutral}</div>
-                    <div class="stat-label">Neutral (${(neutral/totalCount*100).toFixed(1)}%)</div>
+                    <div class="stat-label">Neutral (${predictionsCount > 0 ? (neutral/predictionsCount*100).toFixed(1) : 0}%)</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value">${sources}</div>
@@ -466,9 +486,42 @@
             card.className = 'news-card';
             
             const sourceClass = `source-${item.source.split(':')[0]}`;
-            const predClass = `pred-${item.pred_label}`;
+            const predClass = item.has_prediction ? `pred-${item.pred_label}` : '';
             
             const timestamp = new Date(item.published_at).toLocaleString();
+            
+            // Build sentiment scores section (only if prediction exists)
+            let sentimentHTML = '';
+            if (item.has_prediction) {
+                sentimentHTML = `
+                    <div class="sentiment-scores">
+                        <div class="score-item score-positive">
+                            <div class="score-label">Positive</div>
+                            <div class="score-value">${(item.pred_positive * 100).toFixed(1)}%</div>
+                        </div>
+                        <div class="score-item score-negative">
+                            <div class="score-label">Negative</div>
+                            <div class="score-value">${(item.pred_negative * 100).toFixed(1)}%</div>
+                        </div>
+                        <div class="score-item score-neutral">
+                            <div class="score-label">Neutral</div>
+                            <div class="score-value">${(item.pred_neutral * 100).toFixed(1)}%</div>
+                        </div>
+                    </div>
+                    
+                    <div class="prediction ${predClass}">
+                        ${item.pred_label.toUpperCase()}
+                        <div class="confidence">Confidence: ${(item.pred_confidence * 100).toFixed(1)}%</div>
+                    </div>
+                `;
+            } else {
+                sentimentHTML = `
+                    <div class="prediction" style="background: #f0f0f0; color: #666;">
+                        ⏳ AWAITING ANALYSIS
+                        <div class="confidence">Not yet analyzed by FinBERT</div>
+                    </div>
+                `;
+            }
             
             card.innerHTML = `
                 <div class="news-header">
@@ -480,25 +533,7 @@
                     ${escapeHtml(item.text)}
                 </div>
                 
-                <div class="sentiment-scores">
-                    <div class="score-item score-positive">
-                        <div class="score-label">Positive</div>
-                        <div class="score-value">${(item.pred_positive * 100).toFixed(1)}%</div>
-                    </div>
-                    <div class="score-item score-negative">
-                        <div class="score-label">Negative</div>
-                        <div class="score-value">${(item.pred_negative * 100).toFixed(1)}%</div>
-                    </div>
-                    <div class="score-item score-neutral">
-                        <div class="score-label">Neutral</div>
-                        <div class="score-value">${(item.pred_neutral * 100).toFixed(1)}%</div>
-                    </div>
-                </div>
-                
-                <div class="prediction ${predClass}">
-                    ${item.pred_label.toUpperCase()}
-                    <div class="confidence">Confidence: ${(item.pred_confidence * 100).toFixed(1)}%</div>
-                </div>
+                ${sentimentHTML}
             `;
             
             return card;
