@@ -62,11 +62,13 @@ fetchers = {
     "marketaux": MarketauxFetcher(api_key=settings.marketaux_api_key),
     "finnhub": FinnhubFetcher(api_key=settings.finnhub_api_key),
     "fmp": FMPFetcher(api_key=settings.fmp_api_key),
-    "telegram": TelegramFetcher(
-        api_id=settings.telegram_api_id if settings.telegram_api_id else None,
-        api_hash=settings.telegram_api_hash if settings.telegram_api_hash else None,
-        session_name=settings.telegram_session_name,
-    ),
+    # Telegram temporarily disabled due to rate limiting issues
+    # See docs/TELEGRAM_RATE_LIMIT_FIX.md for details and alternatives
+    # "telegram": TelegramFetcher(
+    #     api_id=settings.telegram_api_id if settings.telegram_api_id else None,
+    #     api_hash=settings.telegram_api_hash if settings.telegram_api_hash else None,
+    #     session_name=settings.telegram_session_name,
+    # ),
 }
 
 # Database

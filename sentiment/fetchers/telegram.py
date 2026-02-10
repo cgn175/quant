@@ -32,11 +32,13 @@ from .base import BaseFetcher, Post, extract_base_token
 INITIAL_BACKOFF_SECONDS = 1
 MAX_BACKOFF_SECONDS = 300  # 5 minutes max
 BACKOFF_MULTIPLIER = 2
-MAX_RETRIES = 5
+MAX_RETRIES = 3  # Reduced from 5 to fail faster
 
 # Rate limiting configuration (Telegram MTProto limits)
-MESSAGES_PER_SECOND = 1  # Conservative limit for message fetching
-BURST_LIMIT = 20  # Max messages in burst before throttling
+# IMPORTANT: These are per-client instance, shared across all fetches
+MESSAGES_PER_SECOND = 0.5  # Reduced from 1 to be more conservative
+BURST_LIMIT = 10  # Reduced from 20
+MIN_FETCH_INTERVAL = 30  # Minimum seconds between fetches for same fetcher instance
 
 
 class RateLimiter:
@@ -132,6 +134,10 @@ class TelegramFetcher(BaseFetcher):
         # Message cache to avoid duplicates
         self._message_cache: set[int] = set()
         self._cache_lock = asyncio.Lock()
+        
+        # Track last fetch time to enforce minimum interval
+        self._last_fetch_time: float = 0
+        self._fetch_lock = asyncio.Lock()
 
         # Ensure session directory exists with secure permissions
         if self.api_id and self.api_hash:
@@ -225,7 +231,7 @@ class TelegramFetcher(BaseFetcher):
                 # Security: Use IPv6 when available for better privacy
                 use_ipv6=False,  # Disable IPv6 for better compatibility
                 # Connection settings
-                timeout=10,  # Shorter timeout
+                timeout=30,  # Shorter timeout
                 connection_retries=2,  # Fewer retries
                 retry_delay=1,
                 auto_reconnect=True,
@@ -234,7 +240,7 @@ class TelegramFetcher(BaseFetcher):
             # Connect with timeout protection
             await asyncio.wait_for(
                 self.client.connect(),
-                timeout=15.0  # 15 second timeout for connection
+                timeout=45.0,  # 45 second timeout for connection
             )
 
             # Check if we need to authorize (first time setup)
@@ -351,6 +357,18 @@ class TelegramFetcher(BaseFetcher):
         """
         if not self.api_id or not self.api_hash:
             return []
+
+        # Enforce minimum fetch interval to avoid rate limits
+        async with self._fetch_lock:
+            now = time.time()
+            time_since_last = now - self._last_fetch_time
+            
+            if time_since_last < MIN_FETCH_INTERVAL:
+                wait_time = MIN_FETCH_INTERVAL - time_since_last
+                print(f"Telegram: Rate limiting, waiting {wait_time:.1f}s before next fetch")
+                await asyncio.sleep(wait_time)
+            
+            self._last_fetch_time = time.time()
 
         # Initialize client if not already done
         if not self.client:
