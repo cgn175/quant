@@ -150,6 +150,28 @@ class SentimentDB:
             ON market_snapshots(symbol, timestamp DESC)
         """)
 
+        # Telegram messages (from listener service)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                channel_username TEXT NOT NULL,
+                text TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                processed BOOLEAN DEFAULT 0,
+                UNIQUE(channel_username, message_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_telegram_messages_timestamp
+            ON telegram_messages(timestamp DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_telegram_messages_processed
+            ON telegram_messages(processed, timestamp DESC)
+        """)
+
         conn.commit()
         conn.close()
         logger.info(f"Sentiment database initialized at {self.db_path}")
@@ -838,3 +860,97 @@ class SentimentDB:
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, _fetch)
+
+    async def save_telegram_message(
+        self,
+        message_id: int,
+        channel_username: str,
+        text: str,
+        timestamp: datetime,
+    ) -> bool:
+        """Save raw Telegram message from listener service."""
+
+        def _save():
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            ts_unix = int(timestamp.timestamp())
+            now_unix = int(datetime.now(timezone.utc).timestamp())
+
+            try:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO telegram_messages
+                    (message_id, channel_username, text, timestamp, created_at, processed)
+                    VALUES (?, ?, ?, ?, ?, 0)
+                """,
+                    (message_id, channel_username, text, ts_unix, now_unix),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"Failed to save telegram message: {e}")
+                return False
+            finally:
+                conn.close()
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _save)
+
+    async def get_unprocessed_telegram_messages(
+        self, limit: int = 100
+    ) -> List[Dict]:
+        """Get unprocessed Telegram messages for sentiment analysis."""
+
+        def _fetch():
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute(
+                    """
+                    SELECT id, message_id, channel_username, text, timestamp
+                    FROM telegram_messages
+                    WHERE processed = 0
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """,
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+            except Exception as e:
+                logger.error(f"Failed to fetch unprocessed messages: {e}")
+                return []
+            finally:
+                conn.close()
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _fetch)
+
+    async def mark_telegram_message_processed(self, message_db_id: int) -> bool:
+        """Mark a Telegram message as processed."""
+
+        def _mark():
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute(
+                    """
+                    UPDATE telegram_messages
+                    SET processed = 1
+                    WHERE id = ?
+                """,
+                    (message_db_id,),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"Failed to mark message as processed: {e}")
+                return False
+            finally:
+                conn.close()
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _mark)

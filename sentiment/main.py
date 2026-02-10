@@ -9,8 +9,8 @@ from typing import Optional
 from config import get_settings
 from db import SentimentDB
 from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fetchers import (
     CoinGeckoFetcher,
     CoinMarketCapFetcher,
@@ -26,19 +26,19 @@ from fetchers import (
     market,
 )
 from fetchers.manager import FetcherManager
+from insights import InsightReport, InsightsGenerator
 from pydantic import BaseModel
 
 from models import FinBERTAnalyzer, get_analyzer
-from insights import InsightsGenerator, InsightReport
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('sentiment_server.log')
-    ]
+        logging.FileHandler("sentiment_server.log"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -63,29 +63,28 @@ fetchers = {
     "marketaux": MarketauxFetcher(api_key=settings.marketaux_api_key),
     "finnhub": FinnhubFetcher(api_key=settings.finnhub_api_key),
     "fmp": FMPFetcher(api_key=settings.fmp_api_key),
-    # Telegram temporarily disabled due to rate limiting issues
-    # See docs/TELEGRAM_RATE_LIMIT_FIX.md for details and alternatives
-    # "telegram": TelegramFetcher(
-    #     api_id=settings.telegram_api_id if settings.telegram_api_id else None,
-    #     api_hash=settings.telegram_api_hash if settings.telegram_api_hash else None,
-    #     session_name=settings.telegram_session_name,
-    # ),
+    "telegram": TelegramFetcher(
+        api_id=settings.telegram_api_id if settings.telegram_api_id else None,
+        api_hash=settings.telegram_api_hash if settings.telegram_api_hash else None,
+        session_name=settings.telegram_session_name,
+    ),
 }
 
 # Insights generator
 insights_generator = InsightsGenerator()
 
-DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "EGLDUSDT", "ASTERUSDT"]
 
 # Initialize FetcherManager for unified general market fetching
 fetcher_manager = FetcherManager(
     fetchers=fetchers,
     cache_ttl_seconds=300,  # 5 minute cache for general news
-    target_symbols=DEFAULT_SYMBOLS
+    target_symbols=DEFAULT_SYMBOLS,
 )
 
 # Database
 sentiment_db = SentimentDB(db_path="sentiment.db")
+
 
 class SentimentResponse(BaseModel):
     symbol: str
@@ -122,16 +121,16 @@ class HistoricalSentimentResponse(BaseModel):
 
 class InsightReportResponse(BaseModel):
     """Extended sentiment report with actionable insights."""
-    
+
     symbol: str
     timestamp: datetime
     current_sentiment: float
-    
+
     # Theme analysis
     top_keywords: list[tuple[str, int]]
     recurring_themes: list[str]
     sentiment_by_theme: dict[str, float]
-    
+
     # Source diversity
     total_sources: int
     active_sources: list[str]
@@ -139,7 +138,7 @@ class InsightReportResponse(BaseModel):
     source_agreement: float
     dominant_source: str | None
     coverage_score: float
-    
+
     # Trend analysis
     trend_direction: str
     trend_strength: float
@@ -147,14 +146,14 @@ class InsightReportResponse(BaseModel):
     anomaly_description: str | None
     confidence_interval: tuple[float, float]
     volatility: float
-    
+
     # Recommendation
     signal: str
     confidence: float
     reasoning: list[str]
     risk_level: str
     suggested_action: str
-    
+
     # 7-day baseline metrics
     sentiment_zscore_7d: float
     mentions_zscore_7d: float
@@ -164,7 +163,7 @@ class InsightReportResponse(BaseModel):
     attention_momentum: float
     regime: str
     regime_confidence: float
-    
+
     # Alerts
     alerts: list[dict]  # List of alert objects
 
@@ -176,28 +175,28 @@ class HealthResponse(BaseModel):
 
 class MarketSentimentResponse(BaseModel):
     """Market-wide sentiment analysis (not symbol-specific)."""
-    
+
     market_sentiment: float  # Aggregate score (-1 to 1)
     score_positive: float
     score_negative: float
     score_neutral: float
-    
+
     mentions: int
     sources: list[str]
-    
+
     # Market regime indicators
     regime: str  # "extreme_fear", "fear", "neutral", "greed", "extreme_greed"
     fear_greed_index: float  # 0-100 scale
-    
+
     # Dominant narratives
     top_keywords: list[tuple[str, int]]
     top_narratives: list[str]
-    
+
     # Category breakdown
     regulatory_sentiment: float  # Sentiment of regulatory news
     institutional_sentiment: float  # Sentiment of institutional news
     technical_sentiment: float  # Sentiment of technical/development news
-    
+
     timestamp: datetime
 
 
@@ -224,28 +223,34 @@ market_sentiment_cache: dict = {}
 async def get_market_sentiment():
     """
     Get overall cryptocurrency market sentiment from general news sources.
-    
+
     This endpoint fetches market-wide crypto news without filtering for specific
     symbols. Useful for understanding overall market regime, regulatory sentiment,
     and institutional adoption trends.
-    
+
     Cache TTL: 5 minutes (market sentiment changes slower than symbol-specific)
     """
     logger.info("GET /sentiment/market - Market sentiment requested")
-    
+
     # Check cache
     if market_sentiment_cache:
-        cache_age = datetime.now(timezone.utc) - market_sentiment_cache.get("timestamp", datetime.min.replace(tzinfo=timezone.utc))
+        cache_age = datetime.now(timezone.utc) - market_sentiment_cache.get(
+            "timestamp", datetime.min.replace(tzinfo=timezone.utc)
+        )
         if cache_age < timedelta(seconds=300):  # 5 minute cache
-            logger.info(f"Returning cached market sentiment (age: {cache_age.total_seconds():.1f}s)")
+            logger.info(
+                f"Returning cached market sentiment (age: {cache_age.total_seconds():.1f}s)"
+            )
             return MarketSentimentResponse(**market_sentiment_cache)
-    
+
     logger.info("Market sentiment cache expired, fetching fresh data...")
     try:
         result = await compute_market_sentiment()
         market_sentiment_cache.clear()
         market_sentiment_cache.update(result)
-        logger.info(f"Market sentiment computed: regime={result['regime']}, score={result['market_sentiment']:.3f}, mentions={result['mentions']}")
+        logger.info(
+            f"Market sentiment computed: regime={result['regime']}, score={result['market_sentiment']:.3f}, mentions={result['mentions']}"
+        )
         return MarketSentimentResponse(**result)
     except Exception as e:
         logger.error(f"Error computing market sentiment: {e}", exc_info=True)
@@ -261,14 +266,18 @@ async def get_sentiment(symbol: str):
         cached = sentiment_cache[symbol]
         cache_age = datetime.now(timezone.utc) - cached["timestamp"]
         if cache_age < timedelta(seconds=get_settings().sentiment_update_interval):
-            logger.info(f"Returning cached sentiment for {symbol} (age: {cache_age.total_seconds():.1f}s)")
+            logger.info(
+                f"Returning cached sentiment for {symbol} (age: {cache_age.total_seconds():.1f}s)"
+            )
             return SentimentResponse(**cached)
 
     logger.info(f"Cache expired for {symbol}, computing fresh sentiment...")
     try:
         result = await compute_sentiment(symbol)
         sentiment_cache[symbol] = result
-        logger.info(f"Sentiment computed for {symbol}: score_1h={result['score_1h']:.3f}, mentions={result['mentions']}")
+        logger.info(
+            f"Sentiment computed for {symbol}: score_1h={result['score_1h']:.3f}, mentions={result['mentions']}"
+        )
         return SentimentResponse(**result)
     except Exception as e:
         logger.error(f"Error computing sentiment for {symbol}: {e}", exc_info=True)
@@ -306,37 +315,37 @@ async def get_sentiment_history(symbol: str, days: int = 7, period: str = "hourl
 @app.get("/sentiment/{symbol}/insights", response_model=InsightReportResponse)
 async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
     """Generate actionable insights from aggregated sentiment data.
-    
+
     This endpoint provides:
     - Theme extraction from news content
     - Source diversity analysis
     - Trend detection and anomaly alerts
     - Actionable trading recommendations
-    
+
     Args:
         symbol: Trading symbol (e.g., BTCUSDT)
         lookback_hours: Hours of data to analyze (default 24, max 168)
     """
     symbol = symbol.upper()
     lookback_hours = min(lookback_hours, 168)  # Cap at 7 days
-    
+
     try:
         # Fetch fresh sentiment data
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=lookback_hours)
-        
+
         # Gather posts from all sources using fetcher_manager
         posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
-        
+
         # Filter to lookback window
         posts = [p for p in posts if p.timestamp >= cutoff]
-        
+
         if not posts:
             raise HTTPException(
                 status_code=404,
-                detail=f"No sentiment data available for {symbol} in the last {lookback_hours} hours"
+                detail=f"No sentiment data available for {symbol} in the last {lookback_hours} hours",
             )
-        
+
         # Analyze sentiment
         analyzer = get_analyzer()
         texts = [p.text for p in posts]
@@ -348,17 +357,19 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
             for post, sent in zip(posts, sentiments):
                 pred_label = max(sent, key=sent.get)
                 pred_confidence = sent[pred_label]
-                raw_preds.append({
-                    "text": post.text[:2000],
-                    "source": post.source,
-                    "fetched_at": datetime.now(timezone.utc),
-                    "published_at": post.timestamp,
-                    "pred_positive": sent["positive"],
-                    "pred_negative": sent["negative"],
-                    "pred_neutral": sent["neutral"],
-                    "pred_label": pred_label,
-                    "pred_confidence": pred_confidence,
-                })
+                raw_preds.append(
+                    {
+                        "text": post.text[:2000],
+                        "source": post.source,
+                        "fetched_at": datetime.now(timezone.utc),
+                        "published_at": post.timestamp,
+                        "pred_positive": sent["positive"],
+                        "pred_negative": sent["negative"],
+                        "pred_neutral": sent["neutral"],
+                        "pred_label": pred_label,
+                        "pred_confidence": pred_confidence,
+                    }
+                )
             await sentiment_db.save_raw_predictions(symbol, raw_preds)
         except Exception:
             pass  # Best-effort, don't break main flow
@@ -371,25 +382,32 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
             weight = max(1, post.score) if post.score > 0 else 1
             weighted_scores.append(score * weight)
             weights.append(weight)
-        
+
         current_score = sum(weighted_scores) / sum(weights) if weights else 0.0
-        
+
         # Get historical data for trend analysis
-        hourly_data = await sentiment_db.get_hourly_sentiment(symbol, hours=lookback_hours)
+        hourly_data = await sentiment_db.get_hourly_sentiment(
+            symbol, hours=lookback_hours
+        )
         historical_scores = [
-            (row["timestamp"], row.get("score_positive", 0) - row.get("score_negative", 0))
+            (
+                row["timestamp"],
+                row.get("score_positive", 0) - row.get("score_negative", 0),
+            )
             for row in hourly_data
         ]
-        
+
         # Get mention history
         historical_mentions = [
-            (row["timestamp"], row.get("mentions_count", 0))
-            for row in hourly_data
+            (row["timestamp"], row.get("mentions_count", 0)) for row in hourly_data
         ]
-        
+
         # Prepare data for insights generator
-        posts_with_scores = [(post, sent["positive"] - sent["negative"]) for post, sent in zip(posts, sentiments)]
-        
+        posts_with_scores = [
+            (post, sent["positive"] - sent["negative"])
+            for post, sent in zip(posts, sentiments)
+        ]
+
         # Generate insights report
         report = insights_generator.generate_report(
             symbol=symbol,
@@ -399,7 +417,7 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
             historical_scores=historical_scores,
             historical_mentions=historical_mentions,
         )
-        
+
         # Convert to response model
         return InsightReportResponse(
             symbol=report.symbol,
@@ -454,7 +472,9 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
 @app.get("/predictions/{symbol}")
 async def get_predictions(symbol: str, hours: int = 24, source: Optional[str] = None):
     """Get raw predictions with FinBERT scores for a symbol."""
-    predictions = await sentiment_db.get_raw_predictions(symbol, hours=hours, source=source)
+    predictions = await sentiment_db.get_raw_predictions(
+        symbol, hours=hours, source=source
+    )
     return {"symbol": symbol, "count": len(predictions), "predictions": predictions}
 
 
@@ -473,10 +493,12 @@ async def compute_sentiment(symbol: str) -> dict:
     # Use fetcher_manager to fetch and categorize posts
     # This fetches general news once and categorizes by symbol (much more efficient)
     posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
-    
+
     # Extract unique sources
-    sources_used = list(set(p.source.split(':')[0] for p in posts))
-    logger.info(f"FetcherManager returned {len(posts)} posts from sources: {', '.join(sources_used)}")
+    sources_used = list(set(p.source.split(":")[0] for p in posts))
+    logger.info(
+        f"FetcherManager returned {len(posts)} posts from sources: {', '.join(sources_used)}"
+    )
 
     if not posts:
         logger.warning(f"No posts found for {symbol} from any source")
@@ -504,7 +526,7 @@ async def compute_sentiment(symbol: str) -> dict:
     posts_24h = []
     weights_1h = []
     weights_24h = []
-    
+
     # For true hourly persistence (this hour only)
     posts_this_hour = []
     weights_this_hour = []
@@ -537,11 +559,17 @@ async def compute_sentiment(symbol: str) -> dict:
 
     # Calculate hourly aggregate (for this specific hour)
     if posts_this_hour:
-        hourly_positive = sum(s["positive"] * w for s, w in zip(posts_this_hour, weights_this_hour))
-        hourly_negative = sum(s["negative"] * w for s, w in zip(posts_this_hour, weights_this_hour))
-        hourly_neutral = sum(s["neutral"] * w for s, w in zip(posts_this_hour, weights_this_hour))
+        hourly_positive = sum(
+            s["positive"] * w for s, w in zip(posts_this_hour, weights_this_hour)
+        )
+        hourly_negative = sum(
+            s["negative"] * w for s, w in zip(posts_this_hour, weights_this_hour)
+        )
+        hourly_neutral = sum(
+            s["neutral"] * w for s, w in zip(posts_this_hour, weights_this_hour)
+        )
         total_weight = sum(weights_this_hour)
-        
+
         score_positive = hourly_positive / total_weight
         score_negative = hourly_negative / total_weight
         score_neutral = hourly_neutral / total_weight
@@ -560,14 +588,14 @@ async def compute_sentiment(symbol: str) -> dict:
         ]
 
     mentions = len(posts_24h)
-    
+
     # Use DB-backed calculations for better historical context
     mentions_zscore = await compute_mentions_zscore_from_db(symbol, mentions)
     velocity = await compute_velocity_from_db(symbol)
-    
+
     # True hourly mentions count (this hour only)
     hourly_mentions = len(posts_this_hour)
-    
+
     # Use hour-truncated timestamp for bucketing
     hour_bucket = now.replace(minute=0, second=0, microsecond=0)
 
@@ -636,27 +664,25 @@ def compute_mentions_zscore(symbol: str, current_mentions: int) -> float:
     return (current_mentions - mean) / stdev
 
 
-async def compute_mentions_zscore_from_db(
-    symbol: str, current_mentions: int
-) -> float:
+async def compute_mentions_zscore_from_db(symbol: str, current_mentions: int) -> float:
     """Calculate z-score using 7-day DB history."""
     try:
         history = await sentiment_db.get_mention_history(symbol, hours=168)
-        
+
         if len(history) < 10:
             return 0.0
-        
+
         counts = [count for _, count in history]
-        
+
         if len(counts) < 2:
             return 0.0
-        
+
         mean = statistics.mean(counts)
         stdev = statistics.stdev(counts)
-        
+
         if stdev == 0:
             return 0.0
-        
+
         return (current_mentions - mean) / stdev
     except Exception:
         # Fallback to in-memory calculation
@@ -689,36 +715,36 @@ async def compute_velocity_from_db(symbol: str) -> float:
     """Calculate velocity using 7-day DB history."""
     try:
         history = await sentiment_db.get_hourly_sentiment(symbol, hours=24)
-        
+
         if len(history) < 10:
             return 0.0
-        
+
         # Calculate sentiment scores from DB rows
         scores = [
             (
                 datetime.fromisoformat(row["timestamp"]),
-                row.get("score_positive", 0) - row.get("score_negative", 0)
+                row.get("score_positive", 0) - row.get("score_negative", 0),
             )
             for row in history
         ]
-        
+
         if not scores:
             return 0.0
-        
+
         now = datetime.now(timezone.utc)
         recent = [s for ts, s in scores if ts >= now - timedelta(hours=6)]
         older = [
-            s 
-            for ts, s in scores 
+            s
+            for ts, s in scores
             if now - timedelta(hours=24) <= ts < now - timedelta(hours=6)
         ]
-        
+
         if not recent or not older:
             return 0.0
-        
+
         recent_avg = statistics.mean(recent)
         older_avg = statistics.mean(older)
-        
+
         return recent_avg - older_avg
     except Exception:
         # Fallback to in-memory calculation
@@ -733,7 +759,7 @@ async def startup():
     logger.info("Initializing FinBERT model...")
     get_analyzer()
     logger.info("FinBERT model loaded successfully")
-    
+
     logger.info(f"Configured fetchers: {', '.join(fetchers.keys())}")
     logger.info("Starting background tasks...")
     asyncio.create_task(cleanup_old_data())
@@ -821,22 +847,24 @@ async def save_market_snapshot_for_symbol(symbol: str):
 async def compute_market_sentiment() -> dict:
     """
     Compute market-wide sentiment from general crypto news.
-    
+
     Returns dict with market sentiment metrics.
     """
-    from collections import Counter
     import re
-    
+    from collections import Counter
+
     now = datetime.now(timezone.utc)
-    
+
     # Use fetcher_manager to get general market posts
     logger.info("Fetching general market posts with FetcherManager...")
     posts = await fetcher_manager.fetch_market_sentiment()
-    
+
     # Extract sources used
-    sources_used = list(set(p.source.split(':')[0] for p in posts))
-    logger.info(f"FetcherManager returned {len(posts)} market posts from {len(sources_used)} sources")
-    
+    sources_used = list(set(p.source.split(":")[0] for p in posts))
+    logger.info(
+        f"FetcherManager returned {len(posts)} market posts from {len(sources_used)} sources"
+    )
+
     if not posts:
         logger.warning("No market posts found from any source")
         return {
@@ -861,27 +889,27 @@ async def compute_market_sentiment() -> dict:
     texts = [p.text for p in posts]
     sentiments = analyzer.analyze(texts)
     logger.info("Market sentiment FinBERT analysis complete")
-    
+
     # Calculate aggregate sentiment
     total_positive = sum(s["positive"] for s in sentiments)
     total_negative = sum(s["negative"] for s in sentiments)
     total_neutral = sum(s["neutral"] for s in sentiments)
     total = len(sentiments)
-    
+
     avg_positive = total_positive / total
     avg_negative = total_negative / total
     avg_neutral = total_neutral / total
-    
+
     market_sentiment = avg_positive - avg_negative
-    
+
     # Calculate Fear & Greed Index (0-100 scale)
     # Based on sentiment, with adjustments for volatility/uncertainty
     base_score = (market_sentiment + 1) * 50  # Map -1 to 1 → 0 to 100
-    
+
     # Adjust for neutral sentiment (high neutral = uncertainty = fear)
     uncertainty_penalty = avg_neutral * 20
     fear_greed_index = max(0, min(100, base_score - uncertainty_penalty))
-    
+
     # Determine regime
     if fear_greed_index < 20:
         regime = "extreme_fear"
@@ -893,17 +921,45 @@ async def compute_market_sentiment() -> dict:
         regime = "greed"
     else:
         regime = "extreme_greed"
-    
+
     # Extract keywords (simple word frequency)
     all_text = " ".join(texts).lower()
     # Remove common words and extract meaningful keywords
-    words = re.findall(r'\b[a-z]{4,}\b', all_text)
-    common_words = {'that', 'this', 'with', 'from', 'will', 'have', 'been', 'were', 'said', 'their', 'would', 'about', 'more', 'other', 'which', 'when', 'what', 'than', 'them', 'some', 'into', 'only', 'also', 'even', 'well', 'much', 'just'}
+    words = re.findall(r"\b[a-z]{4,}\b", all_text)
+    common_words = {
+        "that",
+        "this",
+        "with",
+        "from",
+        "will",
+        "have",
+        "been",
+        "were",
+        "said",
+        "their",
+        "would",
+        "about",
+        "more",
+        "other",
+        "which",
+        "when",
+        "what",
+        "than",
+        "them",
+        "some",
+        "into",
+        "only",
+        "also",
+        "even",
+        "well",
+        "much",
+        "just",
+    }
     meaningful_words = [w for w in words if w not in common_words]
-    
+
     word_counts = Counter(meaningful_words)
     top_keywords = word_counts.most_common(10)
-    
+
     # Extract narratives (based on common keyword patterns)
     narratives = []
     narrative_patterns = {
@@ -913,11 +969,11 @@ async def compute_market_sentiment() -> dict:
         "adoption": ["adoption", "acceptance", "mainstream", "integration"],
         "defi": ["defi", "decentralized", "protocol", "yield", "liquidity"],
     }
-    
+
     for narrative, keywords in narrative_patterns.items():
         if any(kw in all_text for kw in keywords):
             narratives.append(narrative)
-    
+
     # Calculate category-specific sentiment
     def calculate_category_sentiment(keywords: list[str]) -> float:
         category_sentiments = []
@@ -926,11 +982,15 @@ async def compute_market_sentiment() -> dict:
                 score = sent["positive"] - sent["negative"]
                 category_sentiments.append(score)
         return statistics.mean(category_sentiments) if category_sentiments else 0.0
-    
-    regulatory_sentiment = calculate_category_sentiment(narrative_patterns["regulation"])
-    institutional_sentiment = calculate_category_sentiment(narrative_patterns["institutional"])
+
+    regulatory_sentiment = calculate_category_sentiment(
+        narrative_patterns["regulation"]
+    )
+    institutional_sentiment = calculate_category_sentiment(
+        narrative_patterns["institutional"]
+    )
     technical_sentiment = calculate_category_sentiment(narrative_patterns["technical"])
-    
+
     return {
         "market_sentiment": market_sentiment,
         "score_positive": avg_positive,
@@ -973,17 +1033,19 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
         for post, sent in zip(posts, sentiments):
             pred_label = max(sent, key=sent.get)
             pred_confidence = sent[pred_label]
-            raw_preds.append({
-                "text": post.text[:2000],
-                "source": post.source,
-                "fetched_at": datetime.now(timezone.utc),
-                "published_at": post.timestamp,
-                "pred_positive": sent["positive"],
-                "pred_negative": sent["negative"],
-                "pred_neutral": sent["neutral"],
-                "pred_label": pred_label,
-                "pred_confidence": pred_confidence,
-            })
+            raw_preds.append(
+                {
+                    "text": post.text[:2000],
+                    "source": post.source,
+                    "fetched_at": datetime.now(timezone.utc),
+                    "published_at": post.timestamp,
+                    "pred_positive": sent["positive"],
+                    "pred_negative": sent["negative"],
+                    "pred_neutral": sent["neutral"],
+                    "pred_label": pred_label,
+                    "pred_confidence": pred_confidence,
+                }
+            )
         await sentiment_db.save_raw_predictions(symbol, raw_preds)
     except Exception:
         pass  # Best-effort, don't break main flow
@@ -996,15 +1058,15 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
     # Bucket by hour for hourly aggregates
     hourly_buckets: dict[str, dict] = {}
     daily_buckets: dict[str, dict] = {}
-    
+
     for post, sent in zip(posts, sentiments):
         if post.timestamp < cutoff:
             continue
-        
+
         # Hourly bucket
         hour_bucket = post.timestamp.replace(minute=0, second=0, microsecond=0)
         hour_key = hour_bucket.isoformat()
-        
+
         hourly_bucket = hourly_buckets.setdefault(
             hour_key,
             {
@@ -1024,7 +1086,7 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
         hourly_bucket["weight"] += weight
         hourly_bucket["mentions"] += 1
         hourly_bucket["sources"].add(post.source)
-        
+
         # Daily bucket (for long-term storage)
         date_key = post.timestamp.date().isoformat()
         daily_bucket = daily_buckets.setdefault(
@@ -1057,7 +1119,7 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
             mentions_count=bucket["mentions"],
             sources=sorted(bucket["sources"]),
         )
-        
+
         # Also save mention history
         await sentiment_db.save_mention_history(
             symbol=symbol,
