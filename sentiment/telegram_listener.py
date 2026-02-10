@@ -129,19 +129,40 @@ class TelegramListener:
             self.api_id,
             self.api_hash,
             use_ipv6=False,
-            timeout=30,
-            connection_retries=5,
+            timeout=15,  # Reduced from 30 to 15 seconds
+            connection_retries=3,  # Reduced from 5 to 3
             retry_delay=1,
             auto_reconnect=True,
+            flood_sleep_threshold=0,  # Don't auto-sleep on flood, raise error instead
         )
 
         try:
-            # Connect to Telegram
+            # Connect to Telegram with timeout
             logger.info("Connecting to Telegram...")
-            await self.client.connect()
+            try:
+                await asyncio.wait_for(
+                    self.client.connect(),
+                    timeout=45.0  # 45 second timeout for connection
+                )
+                logger.info("Connection established")
+            except asyncio.TimeoutError:
+                logger.error("Connection timeout after 45 seconds!")
+                return
 
-            # Check authorization
-            if not await self.client.is_user_authorized():
+            # Check authorization with timeout
+            logger.info("Checking authorization...")
+            try:
+                is_authorized = await asyncio.wait_for(
+                    self.client.is_user_authorized(),
+                    timeout=30.0  # 30 second timeout for auth check
+                )
+                logger.info(f"Authorization check complete: {is_authorized}")
+            except asyncio.TimeoutError:
+                logger.error("Authorization check timeout after 30 seconds!")
+                await self.client.disconnect()
+                return
+            
+            if not is_authorized:
                 logger.error("Telegram session not authorized!")
                 logger.error("Run setup_telegram.py first to authenticate")
                 await self.client.disconnect()
