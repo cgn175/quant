@@ -504,13 +504,13 @@ async def get_predictions(symbol: str, hours: int = 24, source: Optional[str] = 
 
 
 @app.get("/posts/{symbol}")
-async def get_posts(symbol: str, limit: int = 200):
+async def get_posts(symbol: str, limit: int = 200, hours: int = 24):
     """Get all fetched posts for a symbol, with predictions if available."""
-    # Fetch fresh posts from FetcherManager
-    posts = await fetcher_manager.fetch_for_symbol(symbol, limit=limit)
+    # Get fetched posts from database (last N hours)
+    fetched_posts = await sentiment_db.get_fetched_posts(symbol, hours=hours)
     
-    # Get existing predictions from database (last 24 hours)
-    predictions = await sentiment_db.get_raw_predictions(symbol, hours=24)
+    # Get existing predictions from database (last N hours)
+    predictions = await sentiment_db.get_raw_predictions(symbol, hours=hours)
     
     # Create a lookup map of predictions by (text, source)
     pred_map = {}
@@ -520,19 +520,19 @@ async def get_posts(symbol: str, limit: int = 200):
     
     # Combine posts with predictions
     result = []
-    for post in posts:
-        key = (post.text, post.source)
+    for post in fetched_posts:
+        key = (post["text"], post["source"])
         
         if key in pred_map:
             # Post has prediction - use it
             pred = pred_map[key]
             result.append({
                 "id": pred.get("id"),
-                "symbol": post.symbol,
-                "text": post.text,
-                "source": post.source,
-                "fetched_at": post.timestamp,
-                "published_at": post.published_at or post.timestamp,
+                "symbol": post["symbol"],
+                "text": post["text"],
+                "source": post["source"],
+                "fetched_at": post["timestamp"],
+                "published_at": pred.get("published_at") or post["timestamp"],
                 "pred_positive": pred["pred_positive"],
                 "pred_negative": pred["pred_negative"],
                 "pred_neutral": pred["pred_neutral"],
@@ -543,12 +543,12 @@ async def get_posts(symbol: str, limit: int = 200):
         else:
             # Post doesn't have prediction yet - show without it
             result.append({
-                "id": None,
-                "symbol": post.symbol,
-                "text": post.text,
-                "source": post.source,
-                "fetched_at": post.timestamp,
-                "published_at": post.published_at or post.timestamp,
+                "id": post["id"],
+                "symbol": post["symbol"],
+                "text": post["text"],
+                "source": post["source"],
+                "fetched_at": post["timestamp"],
+                "published_at": post["timestamp"],
                 "pred_positive": None,
                 "pred_negative": None,
                 "pred_neutral": None,
@@ -557,7 +557,9 @@ async def get_posts(symbol: str, limit: int = 200):
                 "has_prediction": False
             })
     
-    return {"symbol": symbol, "count": len(result), "posts": result}
+    # Sort by timestamp (newest first) and limit
+    result.sort(key=lambda x: x["fetched_at"], reverse=True)
+    return {"symbol": symbol, "count": len(result[:limit]), "posts": result[:limit]}
 
 
 @app.get("/accuracy/{symbol}")
@@ -575,6 +577,10 @@ async def compute_sentiment(symbol: str) -> dict:
     # Use fetcher_manager to fetch and categorize posts
     # This fetches general news once and categorizes by symbol (much more efficient)
     posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
+
+    # Save fetched posts to database for persistence
+    saved_count = await sentiment_db.save_fetched_posts(posts)
+    logger.info(f"Saved {saved_count} new posts to database for {symbol}")
 
     # Extract unique sources
     sources_used = list(set(p.source.split(":")[0] for p in posts))

@@ -172,6 +172,28 @@ class SentimentDB:
             ON telegram_messages(processed, timestamp DESC)
         """)
 
+        # Fetched posts (all raw posts from all sources before analysis)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fetched_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                text TEXT NOT NULL,
+                source TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                score INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                UNIQUE(text, source, timestamp)
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_fetched_posts_symbol_time
+            ON fetched_posts(symbol, timestamp DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_fetched_posts_source
+            ON fetched_posts(source, timestamp DESC)
+        """)
+
         conn.commit()
         conn.close()
         logger.info(f"Sentiment database initialized at {self.db_path}")
@@ -954,3 +976,96 @@ class SentimentDB:
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, _mark)
+
+    async def save_fetched_posts(self, posts: List) -> int:
+        """Save fetched posts to database. Returns number of new posts saved."""
+        
+        def _save():
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            now_unix = int(datetime.now(timezone.utc).timestamp())
+            saved_count = 0
+            
+            try:
+                for post in posts:
+                    ts_unix = int(post.timestamp.timestamp())
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO fetched_posts
+                        (symbol, text, source, timestamp, score, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (post.symbol, post.text, post.source, ts_unix, post.score, now_unix),
+                    )
+                    if cursor.rowcount > 0:
+                        saved_count += 1
+                
+                conn.commit()
+                return saved_count
+            except Exception as e:
+                logger.error(f"Failed to save fetched posts: {e}")
+                return 0
+            finally:
+                conn.close()
+        
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _save)
+
+    async def get_fetched_posts(
+        self,
+        symbol: str,
+        hours: int = 24,
+        source: Optional[str] = None,
+    ) -> List[Dict]:
+        """Fetch all posts for a symbol within the past N hours."""
+        
+        def _fetch():
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cutoff_ts = int(
+                (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
+            )
+            
+            try:
+                if source:
+                    cursor.execute(
+                        """
+                        SELECT id, symbol, text, source, timestamp, score, created_at
+                        FROM fetched_posts
+                        WHERE symbol = ? AND timestamp >= ? AND source = ?
+                        ORDER BY timestamp DESC
+                        """,
+                        (symbol, cutoff_ts, source),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT id, symbol, text, source, timestamp, score, created_at
+                        FROM fetched_posts
+                        WHERE symbol = ? AND timestamp >= ?
+                        ORDER BY timestamp DESC
+                        """,
+                        (symbol, cutoff_ts),
+                    )
+                
+                rows = cursor.fetchall()
+                return [
+                    {
+                        "id": row[0],
+                        "symbol": row[1],
+                        "text": row[2],
+                        "source": row[3],
+                        "timestamp": datetime.fromtimestamp(row[4], tz=timezone.utc),
+                        "score": row[5],
+                        "created_at": datetime.fromtimestamp(row[6], tz=timezone.utc),
+                    }
+                    for row in rows
+                ]
+            except Exception as e:
+                logger.error(f"Failed to fetch posts: {e}")
+                return []
+            finally:
+                conn.close()
+        
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _fetch)

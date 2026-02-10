@@ -377,7 +377,7 @@
             
             try {
                 // Fetch all posts (with predictions if available)
-                const response = await fetch(`${API_URL}/posts/${symbol}?limit=200`);
+                const response = await fetch(`${API_URL}/posts/${symbol}?limit=200&hours=${hours}`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
