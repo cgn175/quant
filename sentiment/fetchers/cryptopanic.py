@@ -86,13 +86,15 @@ class CryptopanicFetcher(BaseFetcher):
 
     def _get_currency_codes(self, symbol: str) -> list[str]:
         """Map trading symbol to CryptoPanic currency codes."""
+        from .base import extract_base_token
+        base_token = extract_base_token(symbol)
         mapping = {
-            "BTCUSDT": ["BTC"],
-            "ETHUSDT": ["ETH"],
-            "SOLUSDT": ["SOL"],
-            "BNBUSDT": ["BNB"],
+            "BTC": ["BTC"],
+            "ETH": ["ETH"],
+            "SOL": ["SOL"],
+            "BNB": ["BNB"],
         }
-        return mapping.get(symbol, [])
+        return mapping.get(base_token, [base_token])
 
     def _extract_sentiment(self, text: str) -> int:
         """Simple sentiment extraction from news title/summary."""

@@ -45,10 +45,11 @@ class CoinGeckoFetcher(BaseFetcher):
                         "community_data": True,
                     }
 
+                    headers = {}
                     if self.api_key:
-                        params["x_cg_pro_api_key"] = self.api_key
+                        headers["x_cg_demo_api_key"] = self.api_key
 
-                    response = client.get(market_url, params=params)
+                    response = client.get(market_url, params=params, headers=headers)
                     if response.status_code == 429:
                         logger.warning(
                             "CoinGecko rate limit hit; consider adding SENTIMENT_COINGECKO_API_KEY for higher limits"
@@ -74,7 +75,7 @@ class CoinGeckoFetcher(BaseFetcher):
                     # Fetch trending coins to track mention velocity
                     if coin_id in ["bitcoin", "ethereum"]:
                         trending_url = f"{self.base_url}/search/trending"
-                        trending_response = client.get(trending_url, params=params)
+                        trending_response = client.get(trending_url, headers=headers)
                         if trending_response.status_code == 429:
                             logger.warning(
                                 "CoinGecko rate limit hit on trending endpoint; consider adding SENTIMENT_COINGECKO_API_KEY"

@@ -93,10 +93,18 @@ class NewsAPIFetcher(BaseFetcher):
 
     def _get_keywords(self, symbol: str) -> list[str]:
         """Generate search keywords for symbol."""
+        from .base import extract_base_token
+        base_token = extract_base_token(symbol)
+        
         mapping = {
-            "BTCUSDT": ["bitcoin crypto", "bitcoin news"],
-            "ETHUSDT": ["ethereum crypto", "ethereum news"],
-            "SOLUSDT": ["solana crypto", "solana news"],
-            "BNBUSDT": ["binance crypto", "bnb news"],
+            "BTC": ["bitcoin crypto", "bitcoin news"],
+            "ETH": ["ethereum crypto", "ethereum news"],
+            "SOL": ["solana crypto", "solana news"],
+            "BNB": ["binance crypto", "bnb news"],
         }
-        return mapping.get(symbol, [])
+        
+        if base_token in mapping:
+            return mapping[base_token]
+        
+        # Default: search for the token name
+        return [f"{base_token.lower()} crypto"]

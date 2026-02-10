@@ -15,7 +15,7 @@ class FMPFetcher(BaseFetcher):
     Features: Crypto news, stock news, pagination support, sentiment indicators
     """
 
-    BASE_URL = "https://financialmodelingprep.com/api/v3"
+    BASE_URL = "https://financialmodelingprep.com/stable"
 
     def __init__(self, api_key: str = ""):
         self.api_key = api_key
@@ -48,11 +48,12 @@ class FMPFetcher(BaseFetcher):
             # Fetch crypto news
             params = {
                 "apikey": self.api_key,
-                "limit": min(limit, 100),  # Reasonable limit per request
+                "page": 0,
+                "limit": min(limit, 20),  # Reasonable limit per request
             }
 
             async with session.get(
-                f"{self.BASE_URL}/crypto_news",
+                f"{self.BASE_URL}/news/crypto-latest",
                 params=params,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as response:

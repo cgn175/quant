@@ -4,14 +4,13 @@ from datetime import datetime, timezone
 import praw
 from config import get_settings
 
-from .base import BaseFetcher, Post
+from .base import BaseFetcher, Post, extract_base_token
 
 SYMBOL_KEYWORDS = {
-    "BTCUSDT": ["bitcoin", "btc", "$btc"],
-    "ETHUSDT": ["ethereum", "eth", "$eth", "ether"],
-    "SOLUSDT": ["solana", "sol", "$sol"],
-    "BNBUSDT": ["bnb", "$bnb", "binance coin"],
-    "ETHBTC": ["eth/btc", "ethbtc", "ethereum bitcoin"],
+    "BTC": ["bitcoin", "btc", "$btc"],
+    "ETH": ["ethereum", "eth", "$eth", "ether"],
+    "SOL": ["solana", "sol", "$sol"],
+    "BNB": ["bnb", "$bnb", "binance coin"],
 }
 
 SUBREDDITS = ["CryptoCurrency", "Bitcoin", "ethereum", "solana"]
@@ -34,7 +33,9 @@ class RedditFetcher(BaseFetcher):
         if not self.reddit:
             return []
 
-        keywords = SYMBOL_KEYWORDS.get(symbol, [symbol.lower().replace("usdt", "")])
+        # Extract base token (e.g., BTCUSDT -> BTC)
+        base_token = extract_base_token(symbol)
+        keywords = SYMBOL_KEYWORDS.get(base_token, [base_token.lower()])
         posts: list[Post] = []
         per_sub_limit = max(1, limit // len(SUBREDDITS))
 
