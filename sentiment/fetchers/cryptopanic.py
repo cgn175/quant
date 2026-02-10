@@ -21,7 +21,7 @@ class CryptopanicFetcher(BaseFetcher):
             api_key: CryptoPanic API key (free tier available)
         """
         self.api_key = api_key
-        self.base_url = "https://cryptopanic.com/api/free/v1"
+        self.base_url = "https://cryptopanic.com/api/developer/v2"
         self.timeout = httpx.Timeout(10.0)
 
     def _fetch_sync(self, symbol: str, limit: int = 100) -> list[Post]:
@@ -37,7 +37,9 @@ class CryptopanicFetcher(BaseFetcher):
                 # Build single request with comma-separated currencies
                 params = {
                     "auth_token": self.api_key,
-                    "currencies": ",".join(currencies),  # CryptoPanic accepts comma-separated values
+                    "currencies": ",".join(
+                        currencies
+                    ),  # CryptoPanic accepts comma-separated values
                     "filter": "news",  # Use 'filter' not 'kind'
                 }
 
@@ -86,6 +88,7 @@ class CryptopanicFetcher(BaseFetcher):
     def _get_currency_codes(self, symbol: str) -> list[str]:
         """Map trading symbol to CryptoPanic currency codes."""
         from .base import extract_base_token
+
         base_token = extract_base_token(symbol)
         mapping = {
             "BTC": ["BTC"],

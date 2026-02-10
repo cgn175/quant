@@ -213,7 +213,7 @@ async def test_newsapi():
     print("Testing NewsAPI.org API")
     print("="*60)
     
-    api_key = os.getenv("SENTIMENT_NEWSAPI_API_KEY", "")
+    api_key = os.getenv("SENTIMENT_NEWSAPI_KEY", "")  # Changed from SENTIMENT_NEWSAPI_API_KEY
     fetcher = NewsAPIFetcher(api_key=api_key)
     
     print(f"API Key configured: {bool(api_key)}")
