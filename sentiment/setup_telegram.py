@@ -24,8 +24,12 @@ import os
 import sys
 from getpass import getpass
 
+from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 async def setup_telegram_session():
