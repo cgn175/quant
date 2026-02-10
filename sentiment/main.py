@@ -25,6 +25,7 @@ from fetchers import (
     TwitterFetcher,
     market,
 )
+from fetchers.manager import FetcherManager
 from pydantic import BaseModel
 
 from models import FinBERTAnalyzer, get_analyzer
@@ -71,14 +72,20 @@ fetchers = {
     # ),
 }
 
-# Database
-sentiment_db = SentimentDB(db_path="sentiment.db")
-
 # Insights generator
 insights_generator = InsightsGenerator()
 
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 
+# Initialize FetcherManager for unified general market fetching
+fetcher_manager = FetcherManager(
+    fetchers=fetchers,
+    cache_ttl_seconds=300,  # 5 minute cache for general news
+    target_symbols=DEFAULT_SYMBOLS
+)
+
+# Database
+sentiment_db = SentimentDB(db_path="sentiment.db")
 
 class SentimentResponse(BaseModel):
     symbol: str
@@ -318,14 +325,8 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=lookback_hours)
         
-        # Gather posts from all sources
-        fetch_tasks = [fetcher.fetch(symbol, limit=100) for fetcher in fetchers.values()]
-        all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-        
-        posts = []
-        for result in all_results:
-            if isinstance(result, list) and result:
-                posts.extend(result)
+        # Gather posts from all sources using fetcher_manager
+        posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
         
         # Filter to lookback window
         posts = [p for p in posts if p.timestamp >= cutoff]
@@ -469,23 +470,13 @@ async def compute_sentiment(symbol: str) -> dict:
     now = datetime.now(timezone.utc)
     logger.info(f"Computing sentiment for {symbol}...")
 
-    # Fetch from all available sources in parallel
-    logger.info(f"Fetching from {len(fetchers)} sources: {', '.join(fetchers.keys())}")
-    fetch_tasks = [fetcher.fetch(symbol, limit=50) for fetcher in fetchers.values()]
-    all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-
-    # Collect posts from successful fetchers
-    posts = []
-    sources_used = []
-    for fetcher_name, result in zip(fetchers.keys(), all_results):
-        if isinstance(result, Exception):
-            logger.warning(f"Fetcher '{fetcher_name}' failed: {result}")
-        elif isinstance(result, list) and result:
-            posts.extend(result)
-            sources_used.append(fetcher_name)
-            logger.info(f"Fetcher '{fetcher_name}' returned {len(result)} posts")
-        else:
-            logger.debug(f"Fetcher '{fetcher_name}' returned no posts")
+    # Use fetcher_manager to fetch and categorize posts
+    # This fetches general news once and categorizes by symbol (much more efficient)
+    posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
+    
+    # Extract unique sources
+    sources_used = list(set(p.source.split(':')[0] for p in posts))
+    logger.info(f"FetcherManager returned {len(posts)} posts from sources: {', '.join(sources_used)}")
 
     if not posts:
         logger.warning(f"No posts found for {symbol} from any source")
@@ -838,38 +829,13 @@ async def compute_market_sentiment() -> dict:
     
     now = datetime.now(timezone.utc)
     
-    # Fetch general market news from available sources
-    fetch_tasks = []
+    # Use fetcher_manager to get general market posts
+    logger.info("Fetching general market posts with FetcherManager...")
+    posts = await fetcher_manager.fetch_market_sentiment()
     
-    if fetchers.get("telegram"):
-        fetch_tasks.append(market.fetch_market_telegram(fetchers["telegram"], limit=50))
-        logger.info("Fetching general market news from Telegram...")
-    if fetchers.get("cryptopanic"):
-        fetch_tasks.append(market.fetch_market_cryptopanic(fetchers["cryptopanic"], limit=100))
-        logger.info("Fetching general market news from CryptoPanic...")
-    if fetchers.get("newsapi"):
-        fetch_tasks.append(market.fetch_market_newsapi(fetchers["newsapi"], limit=100))
-        logger.info("Fetching general market news from NewsAPI...")
-    if fetchers.get("reddit"):
-        fetch_tasks.append(market.fetch_market_reddit(fetchers["reddit"], limit=50))
-        logger.info("Fetching general market news from Reddit...")
-    
-    # Gather all results
-    all_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-    
-    # Collect posts
-    posts = []
-    sources_used = set()
-    for i, result in enumerate(all_results):
-        if isinstance(result, Exception):
-            logger.warning(f"Market fetcher {i} failed: {result}")
-        elif isinstance(result, list) and result:
-            posts.extend(result)
-            for post in result:
-                sources_used.add(post.source.split(':')[0])  # Remove channel suffix
-            logger.info(f"Market fetcher {i} returned {len(result)} posts")
-    
-    logger.info(f"Total market posts collected: {len(posts)} from {len(sources_used)} sources")
+    # Extract sources used
+    sources_used = list(set(p.source.split(':')[0] for p in posts))
+    logger.info(f"FetcherManager returned {len(posts)} market posts from {len(sources_used)} sources")
     
     if not posts:
         logger.warning("No market posts found from any source")
@@ -889,7 +855,6 @@ async def compute_market_sentiment() -> dict:
             "technical_sentiment": 0.0,
             "timestamp": now,
         }
-    
     # Analyze sentiment with FinBERT
     logger.info(f"Analyzing {len(posts)} market posts with FinBERT...")
     analyzer = get_analyzer()
