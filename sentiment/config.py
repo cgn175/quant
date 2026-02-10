@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     sentiment_update_interval: int = 60
     sentiment_history_hours: int = 24
 
-    model_name: str = "ProsusAI/finbert"
+    model_name: str = "burakutf/finetuned-finbert-crypto"
 
     class Config:
         env_file = ".env"
