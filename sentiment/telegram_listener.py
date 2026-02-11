@@ -52,15 +52,13 @@ DEFAULT_CHANNELS = [
     "cointelegraph",  # CoinTelegraph official
     "crypto",  # Crypto.com News
     "binance_announcements",  # Binance Official Announcements
-    "coindesk",  # CoinDesk
+    "CoinDeskGlobal",  # CoinDesk
     "the_block_crypto",
     "wublockchainenglish",
-    "CTMarkets",  # Market-specific updates from Cointelegraph
     ### global finance news ###
-    "Bloomberg",
+    "bloomberg",
     "TheFinancialExpressOnline",
-    "CNBCinternational",
-    "statista",
+    "WatcherGuru",
 ]
 
 KEEP_ALIVE_INTERVAL = 30  # seconds

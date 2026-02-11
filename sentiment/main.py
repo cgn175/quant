@@ -574,9 +574,13 @@ async def compute_sentiment(symbol: str) -> dict:
     now = datetime.now(timezone.utc)
     logger.info(f"Computing sentiment for {symbol}...")
 
-    # Use fetcher_manager to fetch and categorize posts
-    # This fetches general news once and categorizes by symbol (much more efficient)
-    posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
+    # Handle MARKET symbol differently - fetch general market posts
+    if symbol == "MARKET":
+        posts = await fetcher_manager.fetch_market_sentiment()
+    else:
+        # Use fetcher_manager to fetch and categorize posts
+        # This fetches general news once and categorizes by symbol (much more efficient)
+        posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
 
     # Save fetched posts to database for persistence
     saved_count = await sentiment_db.save_fetched_posts(posts)
