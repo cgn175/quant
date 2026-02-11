@@ -88,3 +88,6 @@ temp/
 lib/
 
 *.db
+
+sentiment/models/
+sentiment/models_local/

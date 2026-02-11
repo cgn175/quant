@@ -508,55 +508,61 @@ async def get_posts(symbol: str, limit: int = 200, hours: int = 24):
     """Get all fetched posts for a symbol, with predictions if available."""
     # Get fetched posts from database (last N hours)
     fetched_posts = await sentiment_db.get_fetched_posts(symbol, hours=hours)
-    
+
     # Get existing predictions from database (last N hours)
     predictions = await sentiment_db.get_raw_predictions(symbol, hours=hours)
-    
+
     # Create a lookup map of predictions by (text, source)
     pred_map = {}
     for pred in predictions:
         key = (pred["text"], pred["source"])
         pred_map[key] = pred
-    
+
     # Combine posts with predictions
     result = []
     for post in fetched_posts:
+        if post["source"] in ["coingecko", "coingecko_trending"]:
+            continue
         key = (post["text"], post["source"])
-        
+
         if key in pred_map:
             # Post has prediction - use it
             pred = pred_map[key]
-            result.append({
-                "id": pred.get("id"),
-                "symbol": post["symbol"],
-                "text": post["text"],
-                "source": post["source"],
-                "fetched_at": post["timestamp"],
-                "published_at": pred.get("published_at") or post["timestamp"],
-                "pred_positive": pred["pred_positive"],
-                "pred_negative": pred["pred_negative"],
-                "pred_neutral": pred["pred_neutral"],
-                "pred_label": pred["pred_label"],
-                "pred_confidence": pred["pred_confidence"],
-                "has_prediction": True
-            })
+            result.append(
+                {
+                    "id": pred.get("id"),
+                    "symbol": post["symbol"],
+                    "text": post["text"],
+                    "source": post["source"],
+                    "fetched_at": post["timestamp"],
+                    "published_at": pred.get("published_at") or post["timestamp"],
+                    "pred_positive": pred["pred_positive"],
+                    "pred_negative": pred["pred_negative"],
+                    "pred_neutral": pred["pred_neutral"],
+                    "pred_label": pred["pred_label"],
+                    "pred_confidence": pred["pred_confidence"],
+                    "has_prediction": True,
+                }
+            )
         else:
             # Post doesn't have prediction yet - show without it
-            result.append({
-                "id": post["id"],
-                "symbol": post["symbol"],
-                "text": post["text"],
-                "source": post["source"],
-                "fetched_at": post["timestamp"],
-                "published_at": post["timestamp"],
-                "pred_positive": None,
-                "pred_negative": None,
-                "pred_neutral": None,
-                "pred_label": None,
-                "pred_confidence": None,
-                "has_prediction": False
-            })
-    
+            result.append(
+                {
+                    "id": post["id"],
+                    "symbol": post["symbol"],
+                    "text": post["text"],
+                    "source": post["source"],
+                    "fetched_at": post["timestamp"],
+                    "published_at": post["timestamp"],
+                    "pred_positive": None,
+                    "pred_negative": None,
+                    "pred_neutral": None,
+                    "pred_label": None,
+                    "pred_confidence": None,
+                    "has_prediction": False,
+                }
+            )
+
     # Sort by timestamp (newest first) and limit
     result.sort(key=lambda x: x["fetched_at"], reverse=True)
     return {"symbol": symbol, "count": len(result[:limit]), "posts": result[:limit]}

@@ -71,29 +71,6 @@ class CoinGeckoFetcher(BaseFetcher):
                                     score=0,
                                 )
                             )
-
-                    # Fetch trending coins to track mention velocity
-                    if coin_id in ["bitcoin", "ethereum"]:
-                        trending_url = f"{self.base_url}/search/trending"
-                        trending_response = client.get(trending_url, headers=headers)
-                        if trending_response.status_code == 429:
-                            logger.warning(
-                                "CoinGecko rate limit hit on trending endpoint; consider adding SENTIMENT_COINGECKO_API_KEY"
-                            )
-                            continue
-                        if trending_response.status_code == 200:
-                            trending_data = trending_response.json()
-                            if self._is_in_trending(trending_data, coin_id):
-                                posts.append(
-                                    Post(
-                                        text=f"{coin_id.capitalize()} is in CoinGecko trending coins",
-                                        source="coingecko_trending",
-                                        symbol=symbol,
-                                        timestamp=datetime.now(timezone.utc),
-                                        score=1,
-                                    )
-                                )
-
         except Exception as e:
             # Silently fail - other fetchers will still work
             pass

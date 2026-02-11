@@ -21,12 +21,12 @@ class FinBERTAnalyzer:
         self.prosus_model_name = "ProsusAI/finbert"
         self.crypto_model_name = "burakutf/finetuned-finbert-crypto"
 
-        self.prosus_tokenizer = AutoTokenizer.from_pretrained(self.prosus_model_name)
-        self.prosus_model = AutoModelForSequenceClassification.from_pretrained(self.prosus_model_name)
+        self.prosus_tokenizer = AutoTokenizer.from_pretrained(self.prosus_model_name, local_files_only=True)
+        self.prosus_model = AutoModelForSequenceClassification.from_pretrained(self.prosus_model_name, local_files_only=True)
         self.prosus_model.eval()
 
-        self.crypto_tokenizer = AutoTokenizer.from_pretrained(self.crypto_model_name)
-        self.crypto_model = AutoModelForSequenceClassification.from_pretrained(self.crypto_model_name)
+        self.crypto_tokenizer = AutoTokenizer.from_pretrained(self.crypto_model_name, local_files_only=True)
+        self.crypto_model = AutoModelForSequenceClassification.from_pretrained(self.crypto_model_name, local_files_only=True)
         self.crypto_model.eval()
 
         if torch.backends.mps.is_available():
