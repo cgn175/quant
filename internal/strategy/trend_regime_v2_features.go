@@ -4,6 +4,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/features"
+	"github.com/cgn175/quant-bot/internal/sentiment"
 )
 
 // BuildRegimeV2Features computes the 8 features needed by the Regime Classifier v2
@@ -17,9 +18,10 @@ func BuildRegimeV2Features(
 	fundingCache *data.FundingCache,
 	symbol string,
 	idx int,
+	sent *sentiment.SentimentData,
 ) map[string]float64 {
 	// Start with the v1 features
-	m := BuildRegimeFeatures(candles, fundingCache, symbol, idx)
+	m := BuildRegimeFeatures(candles, fundingCache, symbol, idx, sent)
 
 	close := candles[idx].Close
 	if close <= 0 {

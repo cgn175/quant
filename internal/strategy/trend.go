@@ -18,6 +18,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/features"
 	"github.com/cgn175/quant-bot/internal/metrics"
 	"github.com/cgn175/quant-bot/internal/mlfilter"
+	"github.com/cgn175/quant-bot/internal/sentiment"
 	"github.com/rs/zerolog/log"
 )
 
@@ -28,31 +29,31 @@ import (
 // TrendConfig holds all parameters for the trend-following strategy.
 type TrendConfig struct {
 	// Layer 1: Entry signal parameters
-	DonchianPeriod int     // 20 — breakout lookback
-	EMAFast        int     // 9
-	EMASlow        int     // 21
-	EMAConfirmBars int     // 5 — crossover must have happened within N bars
-	EMATrend       int     // 50 — trend direction filter
-	VolumePeriod   int     // 20 — volume confirmation lookback
+	DonchianPeriod int // 20 — breakout lookback
+	EMAFast        int // 9
+	EMASlow        int // 21
+	EMAConfirmBars int // 5 — crossover must have happened within N bars
+	EMATrend       int // 50 — trend direction filter
+	VolumePeriod   int // 20 — volume confirmation lookback
 
 	// Layer 2: Regime filter parameters
-	ATRPeriod      int     // 14
-	ATRStopMult    float64 // 3.0
-	ADXPeriod      int     // 14
-	ADXThreshold   float64 // 20.0 — minimum ADX for trend
-	VolatilityLow  float64 // 0.5 — min ATR ratio
-	VolatilityHigh float64 // 2.5 — max ATR ratio
-	FundingExtreme float64 // 0.0005 — block trades
+	ATRPeriod       int     // 14
+	ATRStopMult     float64 // 3.0
+	ADXPeriod       int     // 14
+	ADXThreshold    float64 // 20.0 — minimum ADX for trend
+	VolatilityLow   float64 // 0.5 — min ATR ratio
+	VolatilityHigh  float64 // 2.5 — max ATR ratio
+	FundingExtreme  float64 // 0.0005 — block trades
 	FundingElevated float64 // 0.0003 — reduce size
 
 	// Layer 3: Risk management
-	RiskPerTrade       float64 // 0.01 — 1% of equity per trade
-	MaxLeverage        float64 // 2.0
-	ChandelierLookback int     // 10 — trailing stop lookback
-	DailyLossCapPct    float64 // 0.03 — 3% of equity
-	MaxOpenPositions   int     // 4
-	MaxCorrelatedSame  int     // 2 — max same-direction on correlated pairs
-	MaxPositionsPerSector int  // 1 — max positions in same sector (Patch 3)
+	RiskPerTrade          float64 // 0.01 — 1% of equity per trade
+	MaxLeverage           float64 // 2.0
+	ChandelierLookback    int     // 10 — trailing stop lookback
+	DailyLossCapPct       float64 // 0.03 — 3% of equity
+	MaxOpenPositions      int     // 4
+	MaxCorrelatedSame     int     // 2 — max same-direction on correlated pairs
+	MaxPositionsPerSector int     // 1 — max positions in same sector (Patch 3)
 
 	// Partial exit parameters
 	PartialExitEnabled bool
@@ -120,32 +121,32 @@ func getSector(symbol string) string {
 // matching the Plan D specification.
 func DefaultTrendConfig() TrendConfig {
 	return TrendConfig{
-		DonchianPeriod:     20,
-		EMAFast:            9,
-		EMASlow:            21,
-		EMAConfirmBars:     5,
-		EMATrend:           50,
-		VolumePeriod:       20,
-		ATRPeriod:          14,
-		ATRStopMult:        3.0,
-		ADXPeriod:          14,
-		ADXThreshold:       20.0,
-		VolatilityLow:      0.5,
-		VolatilityHigh:     2.5,
-		FundingExtreme:     0.0005,
-		FundingElevated:    0.0003,
-		RiskPerTrade:       0.01,
-		MaxLeverage:        2.0,
-		ChandelierLookback: 10,
-		DailyLossCapPct:    0.03,
-		MaxOpenPositions:   4,
-		MaxCorrelatedSame:  2,
+		DonchianPeriod:        20,
+		EMAFast:               9,
+		EMASlow:               21,
+		EMAConfirmBars:        5,
+		EMATrend:              50,
+		VolumePeriod:          20,
+		ATRPeriod:             14,
+		ATRStopMult:           3.0,
+		ADXPeriod:             14,
+		ADXThreshold:          20.0,
+		VolatilityLow:         0.5,
+		VolatilityHigh:        2.5,
+		FundingExtreme:        0.0005,
+		FundingElevated:       0.0003,
+		RiskPerTrade:          0.01,
+		MaxLeverage:           2.0,
+		ChandelierLookback:    10,
+		DailyLossCapPct:       0.03,
+		MaxOpenPositions:      4,
+		MaxCorrelatedSame:     2,
 		MaxPositionsPerSector: 1,
-		PartialExitEnabled: true,
-		FirstTargetR:       3.0,
-		FirstExitPct:       0.25,
-		SecondTargetR:      6.0,
-		SecondExitPct:      0.25,
+		PartialExitEnabled:    true,
+		FirstTargetR:          3.0,
+		FirstExitPct:          0.25,
+		SecondTargetR:         6.0,
+		SecondExitPct:         0.25,
 	}
 }
 
@@ -174,18 +175,18 @@ func (c TrendConfig) MinCandles() int {
 
 // TrendPosition tracks an open position with its trailing stop state.
 type TrendPosition struct {
-	Symbol        string
-	Side          string    // "LONG" or "SHORT"
-	EntryPrice    float64
-	EntryTime     time.Time
-	Size          float64   // current remaining size
-	OriginalSize  float64   // initial size (before partial exits)
-	InitialStop   float64
-	TrailingStop  float64   // current trailing stop (only tightens)
-	InitialRisk   float64   // entry - initial_stop (absolute value, per unit)
-	PartialStage  int       // 0=none, 1=first partial done, 2=second partial done
-	SizeMultiplier float64  // 1.0 or 0.5 (from funding filter)
-	Pending       bool      // true if this is a reservation (order not yet filled)
+	Symbol         string
+	Side           string // "LONG" or "SHORT"
+	EntryPrice     float64
+	EntryTime      time.Time
+	Size           float64 // current remaining size
+	OriginalSize   float64 // initial size (before partial exits)
+	InitialStop    float64
+	TrailingStop   float64 // current trailing stop (only tightens)
+	InitialRisk    float64 // entry - initial_stop (absolute value, per unit)
+	PartialStage   int     // 0=none, 1=first partial done, 2=second partial done
+	SizeMultiplier float64 // 1.0 or 0.5 (from funding filter)
+	Pending        bool    // true if this is a reservation (order not yet filled)
 }
 
 // CurrentR returns the current profit in R-multiples.
@@ -208,19 +209,19 @@ func (p *TrendPosition) CurrentR(currentPrice float64) float64 {
 
 // ExitSignal represents a trailing stop or full exit.
 type ExitSignal struct {
-	Symbol   string
-	Reason   string  // "trailing_stop", "daily_loss_cap"
-	Price    float64 // current price that triggered exit
+	Symbol string
+	Reason string  // "trailing_stop", "daily_loss_cap"
+	Price  float64 // current price that triggered exit
 }
 
 // PartialExitSignal represents a partial position close at an R-target.
 type PartialExitSignal struct {
-	Symbol      string
-	ExitPct     float64 // fraction of current size to close (0.25)
-	ExitSize    float64 // absolute size to close
-	Reason      string  // "partial_3r", "partial_6r"
-	MoveStopBE  bool    // move stop to breakeven after first partial
-	NewStop     float64 // new stop level (if MoveStopBE)
+	Symbol     string
+	ExitPct    float64 // fraction of current size to close (0.25)
+	ExitSize   float64 // absolute size to close
+	Reason     string  // "partial_3r", "partial_6r"
+	MoveStopBE bool    // move stop to breakeven after first partial
+	NewStop    float64 // new stop level (if MoveStopBE)
 }
 
 // ---------------------------------------------------------------------------
@@ -229,9 +230,10 @@ type PartialExitSignal struct {
 
 // TrendStrategy implements the Plan D pure trend-following system.
 type TrendStrategy struct {
-	config   TrendConfig
-	mlClient *mlfilter.Client
-	prom     *metrics.Metrics
+	config          TrendConfig
+	mlClient        *mlfilter.Client
+	sentimentClient *sentiment.Client
+	prom            *metrics.Metrics
 
 	mu        sync.Mutex
 	positions map[string]*TrendPosition
@@ -253,6 +255,11 @@ func WithMLClient(c *mlfilter.Client) TrendStrategyOption {
 // WithMetrics sets the Prometheus metrics collector.
 func WithMetrics(m *metrics.Metrics) TrendStrategyOption {
 	return func(ts *TrendStrategy) { ts.prom = m }
+}
+
+// WithSentimentClient sets the sentiment client.
+func WithSentimentClient(s *sentiment.Client) TrendStrategyOption {
+	return func(ts *TrendStrategy) { ts.sentimentClient = s }
 }
 
 // NewTrendStrategy creates a new trend-following strategy with the given config.
@@ -638,12 +645,18 @@ func (ts *TrendStrategy) OnBar(
 	// 2a. Regime filter — Regime Classifier OR legacy ML OR legacy ADX
 	if cfg.RegimeFilterEnabled && ts.mlClient != nil && ts.mlClient.IsEnabled() {
 		// --- Regime Classifier (Traffic Light) ---
+		// Fetch sentiment if available
+		var sent *sentiment.SentimentData
+		if ts.sentimentClient != nil {
+			sent = ts.sentimentClient.Get(symbol)
+		}
+
 		// Pick v1 or v2 features based on per-symbol config
 		var regimeFeatures map[string]float64
 		if ver, ok := cfg.RegimeSymbolVersions[symbol]; ok && ver == "v2" {
-			regimeFeatures = BuildRegimeV2Features(candles, fundingCache, symbol, idx)
+			regimeFeatures = BuildRegimeV2Features(candles, fundingCache, symbol, idx, sent)
 		} else {
-			regimeFeatures = BuildRegimeFeatures(candles, fundingCache, symbol, idx)
+			regimeFeatures = BuildRegimeFeatures(candles, fundingCache, symbol, idx, sent)
 		}
 		mlStart := time.Now()
 		// Use directional model if available for this symbol
@@ -709,7 +722,12 @@ func (ts *TrendStrategy) OnBar(
 			}
 		}
 	} else if ts.mlClient != nil && ts.mlClient.IsEnabled() {
-		mlFeatures := BuildMLFeatures(candles, fundingCache, symbol, idx, cfg)
+		// Fetch sentiment if available
+		var sent *sentiment.SentimentData
+		if ts.sentimentClient != nil {
+			sent = ts.sentimentClient.Get(symbol)
+		}
+		mlFeatures := BuildMLFeatures(candles, fundingCache, symbol, idx, cfg, sent)
 		mlStart := time.Now()
 		prob, err := ts.mlClient.Predict(context.Background(), symbol, mlFeatures)
 		if ts.prom != nil {

@@ -144,6 +144,21 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		fundingCache = data.NewFundingCache(100)
 	}
 
+	// ------------------------------------------------------------------ //
+	//  Sentiment Client (init early for strategy injection)              //
+	// ------------------------------------------------------------------ //
+	var sentimentClient *sentiment.Client
+	if cfg.Sentiment.Enabled {
+		sentimentClient = sentiment.NewClient(
+			cfg.Sentiment.URL,
+			time.Duration(cfg.Sentiment.PollIntervalSeconds)*time.Second,
+		)
+		sentimentClient.Start(cfg.Symbols)
+		// Defer stop is handled at end or via context?
+		// We'll call Stop() explicitly on shutdown or defer here.
+		// Since we need it for the scheduler later, we keep it alive.
+	}
+
 	// Build TrendStrategy config from config.yaml
 	trendCfg := strategy.TrendConfig{
 		DonchianPeriod:     cfg.Strategy.DonchianPeriod,
@@ -263,6 +278,9 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 	if mlClient != nil {
 		opts = append(opts, strategy.WithMLClient(mlClient))
 	}
+	if sentimentClient != nil {
+		opts = append(opts, strategy.WithSentimentClient(sentimentClient))
+	}
 	opts = append(opts, strategy.WithMetrics(prom))
 	trendStrat := strategy.NewTrendStrategyWithOpts(trendCfg, opts...)
 
@@ -346,12 +364,7 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 	//  Sentiment scheduler (optional, if enabled)                         //
 	// ------------------------------------------------------------------ //
 	var sentimentScheduler *sentiment.Scheduler
-	if cfg.Sentiment.Enabled {
-		sentimentClient := sentiment.NewClient(
-			cfg.Sentiment.URL,
-			time.Duration(cfg.Sentiment.PollIntervalSeconds)*time.Second,
-		)
-		sentimentClient.Start(cfg.Symbols)
+	if cfg.Sentiment.Enabled && sentimentClient != nil {
 		defer sentimentClient.Stop()
 
 		sentimentScheduler = sentiment.NewScheduler(

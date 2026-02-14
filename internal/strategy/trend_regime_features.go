@@ -6,6 +6,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/features"
+	"github.com/cgn175/quant-bot/internal/sentiment"
 )
 
 // BuildRegimeFeatures computes the 6 features needed by the Regime Classifier
@@ -17,6 +18,7 @@ func BuildRegimeFeatures(
 	fundingCache *data.FundingCache,
 	symbol string,
 	idx int,
+	sent *sentiment.SentimentData,
 ) map[string]float64 {
 	m := make(map[string]float64, 6)
 

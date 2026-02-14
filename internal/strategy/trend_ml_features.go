@@ -6,6 +6,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/features"
+	"github.com/cgn175/quant-bot/internal/sentiment"
 )
 
 func BuildMLFeatures(
@@ -14,6 +15,7 @@ func BuildMLFeatures(
 	symbol string,
 	idx int,
 	cfg TrendConfig,
+	sent *sentiment.SentimentData,
 ) map[string]float64 {
 	m := make(map[string]float64, 19)
 	close := candles[idx].Close
