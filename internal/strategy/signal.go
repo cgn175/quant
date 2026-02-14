@@ -39,9 +39,10 @@ type Signal struct {
 	Price      float64
 	Prediction *model.Prediction
 	Features   *features.FeatureVector
-	Confidence float64
-	StopLoss   float64
-	TakeProfit float64
+	Confidence     float64
+	StopLoss       float64
+	TakeProfit     float64
+	SizeMultiplier float64
 }
 
 type Config struct {

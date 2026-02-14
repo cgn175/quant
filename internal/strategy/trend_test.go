@@ -59,8 +59,8 @@ func TestDefaultTrendConfig(t *testing.T) {
 	if cfg.ATRPeriod != 14 {
 		t.Errorf("ATRPeriod: got %d, want 14", cfg.ATRPeriod)
 	}
-	if !almostEqual(cfg.ATRStopMult, 3.0) {
-		t.Errorf("ATRStopMult: got %.2f, want 3.0", cfg.ATRStopMult)
+	if !almostEqual(cfg.ATRStopMult, 2.5) {
+		t.Errorf("ATRStopMult: got %.2f, want 2.5", cfg.ATRStopMult)
 	}
 	if cfg.ADXPeriod != 14 {
 		t.Errorf("ADXPeriod: got %d, want 14", cfg.ADXPeriod)
@@ -533,11 +533,11 @@ func TestCheckPartialExit_3R(t *testing.T) {
 	if !almostEqual(partial.NewStop, 50000) {
 		t.Errorf("NewStop: got %.2f, want 50000 (breakeven)", partial.NewStop)
 	}
-	if !almostEqual(partial.ExitPct, 0.25) {
-		t.Errorf("ExitPct: got %.4f, want 0.25", partial.ExitPct)
+	if !almostEqual(partial.ExitPct, 0.10) {
+		t.Errorf("ExitPct: got %.4f, want 0.10", partial.ExitPct)
 	}
-	if !almostEqual(partial.ExitSize, 0.25) {
-		t.Errorf("ExitSize: got %.4f, want 0.25 (25%% of 1.0)", partial.ExitSize)
+	if !almostEqual(partial.ExitSize, 0.10) {
+		t.Errorf("ExitSize: got %.4f, want 0.10 (10%% of 1.0)", partial.ExitSize)
 	}
 
 	// Verify CheckPartialExit does NOT advance PartialStage (read-only)
@@ -579,21 +579,10 @@ func TestCheckPartialExit_6R(t *testing.T) {
 	}
 
 	// Now check at 6R: price = 50000 + 6*2000 = 62000
+	// SecondExitPct is 0 in default config, so no 6R partial exit expected
 	partial := ts.CheckPartialExit("BTCUSDT", 62000)
-	if partial == nil {
-		t.Fatal("expected partial exit at 6R")
-	}
-	if partial.Reason != "partial_6r" {
-		t.Errorf("reason: got %s, want partial_6r", partial.Reason)
-	}
-	if partial.MoveStopBE {
-		t.Error("expected MoveStopBE=false at 6R")
-	}
-
-	// Verify CheckPartialExit does NOT advance PartialStage (still 1)
-	pos2 := ts.GetPosition("BTCUSDT")
-	if pos2.PartialStage != 1 {
-		t.Errorf("PartialStage should remain 1 after CheckPartialExit (not yet filled), got %d", pos2.PartialStage)
+	if partial != nil {
+		t.Errorf("expected no partial exit at 6R (SecondExitPct=0), got %s", partial.Reason)
 	}
 }
 

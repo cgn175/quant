@@ -644,8 +644,7 @@ func handleTrendEntry(sym string, sig *strategy.Signal, d trendDepsBundle) {
 		return
 	}
 
-	// Position sizing: Confidence is repurposed as sizeMultiplier in trend strategy
-	sizeMultiplier := sig.Confidence
+	sizeMultiplier := sig.SizeMultiplier
 	if sizeMultiplier <= 0 {
 		sizeMultiplier = 1.0
 	}

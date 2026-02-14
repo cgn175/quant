@@ -1,0 +1,15 @@
+{
+  "version": 3,
+  "skills": {
+    "quantitative-research": {
+      "source": "omer-metin/skills-for-antigravity",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/omer-metin/skills-for-antigravity.git",
+      "skillPath": "skills/quantitative-research/SKILL.md",
+      "skillFolderHash": "1c756830643e56ad351332ce5c4cae55b31412f0",
+      "installedAt": "2026-02-14T21:30:51.429Z",
+      "updatedAt": "2026-02-14T21:30:51.429Z"
+    }
+  },
+  "dismissed": {}
+}

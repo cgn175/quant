@@ -6,9 +6,7 @@ No ML. No prediction. Pure mechanical rules.
 
 Layer 1 — Entry Signals:
   A. Donchian Channel Breakout (primary)
-  B. Dual EMA Crossover (confirmation)
-  C. EMA Trend Filter
-  D. Volume Confirmation
+  B. EMA Trend Filter
 
 Layer 2 — Regime Filters:
   1. ADX trend strength
@@ -94,29 +92,19 @@ def volume_confirmation(df: pd.DataFrame, period: int = 20) -> pd.Series:
 def combined_entry_signal(
     df: pd.DataFrame,
     donchian_period: int = 20,
-    ema_fast: int = 9,
-    ema_slow: int = 21,
-    ema_confirm_bars: int = 5,
     ema_trend_period: int = 50,
-    volume_period: int = 20,
 ) -> pd.Series:
-    """Combined entry signal: Donchian AND EMA confirmation AND trend AND volume.
+    """Combined entry signal: Donchian AND EMA trend filter.
 
     Returns: Series of int: 1 (long), -1 (short), 0 (no signal).
     """
     sig_donchian = donchian_breakout(df, donchian_period)
-    sig_ema = ema_crossover_confirmation(df, ema_fast, ema_slow, ema_confirm_bars)
     sig_trend = ema_trend_filter(df, ema_trend_period)
-    sig_vol = volume_confirmation(df, volume_period)
 
     signal = pd.Series(0, index=df.index, dtype=int)
 
-    long_mask = (
-        (sig_donchian == 1) & (sig_ema == 1) & (sig_trend == 1) & sig_vol
-    )
-    short_mask = (
-        (sig_donchian == -1) & (sig_ema == -1) & (sig_trend == -1) & sig_vol
-    )
+    long_mask = (sig_donchian == 1) & (sig_trend == 1)
+    short_mask = (sig_donchian == -1) & (sig_trend == -1)
 
     signal[long_mask] = 1
     signal[short_mask] = -1
@@ -245,7 +233,7 @@ DEFAULT_PARAMS = {
     "ema_trend_period": 50,
     "volume_period": 20,
     "atr_period": 14,
-    "atr_stop_mult": 3.0,
+    "atr_stop_mult": 2.5,
     "adx_period": 14,
     "adx_threshold": 20.0,
     "vol_filter_fast": 14,
@@ -283,11 +271,7 @@ def generate_signals(
     raw_signal = combined_entry_signal(
         df,
         donchian_period=p["donchian_period"],
-        ema_fast=p["ema_fast"],
-        ema_slow=p["ema_slow"],
-        ema_confirm_bars=p["ema_confirm_bars"],
         ema_trend_period=p["ema_trend_period"],
-        volume_period=p["volume_period"],
     )
 
     # --- Layer 2: Regime filters ---

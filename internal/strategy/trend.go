@@ -91,6 +91,12 @@ type TrendConfig struct {
 	DynamicStopK       float64 // multiplier for predicted range → stop %
 	DynamicStopMinPct  float64 // floor (e.g., 0.01 = 1%)
 	DynamicStopMaxPct  float64 // ceiling (e.g., 0.04 = 4%)
+
+	// Portfolio circuit breaker
+	MaxDrawdownPct     float64 // 0.15 — halt all if equity drops 15% from peak
+	DrawdownHaltHours  int     // 48 — hours to halt after drawdown breach
+	MaxLossPerPosition float64 // 0.05 — hard stop at 5% of equity per position
+	ExtremeVolATRRatio float64 // 3.0 — halt entries when BTC ATR(14)/ATR(50) > this
 }
 
 // SectorMap classifies trading symbols by sector for correlation management (Patch 3).
@@ -128,7 +134,7 @@ func DefaultTrendConfig() TrendConfig {
 		EMATrend:              50,
 		VolumePeriod:          20,
 		ATRPeriod:             14,
-		ATRStopMult:           3.0,
+		ATRStopMult:           2.5,
 		ADXPeriod:             14,
 		ADXThreshold:          20.0,
 		VolatilityLow:         0.5,
@@ -144,9 +150,13 @@ func DefaultTrendConfig() TrendConfig {
 		MaxPositionsPerSector: 1,
 		PartialExitEnabled:    true,
 		FirstTargetR:          3.0,
-		FirstExitPct:          0.25,
+		FirstExitPct:          0.10,
 		SecondTargetR:         6.0,
-		SecondExitPct:         0.25,
+		SecondExitPct:         0.0,
+		MaxDrawdownPct:        0.15,
+		DrawdownHaltHours:     48,
+		MaxLossPerPosition:    0.05,
+		ExtremeVolATRRatio:    3.0,
 	}
 }
 
@@ -242,6 +252,10 @@ type TrendStrategy struct {
 	dailyPnL       float64
 	dailyResetDate time.Time
 	dailyHalted    bool
+
+	// Portfolio drawdown circuit breaker
+	peakEquity        float64
+	drawdownHaltUntil time.Time
 }
 
 // TrendStrategyOption configures optional dependencies for TrendStrategy.
@@ -407,6 +421,11 @@ func (ts *TrendStrategy) canEnterLocked(symbol string, direction string) (bool, 
 		return false, "daily_halted"
 	}
 
+	// Portfolio drawdown circuit breaker
+	if time.Now().Before(ts.drawdownHaltUntil) {
+		return false, "drawdown_halted"
+	}
+
 	// Sector limit check (Patch 3: Correlation Guard)
 	if ts.config.MaxPositionsPerSector > 0 {
 		newSector := getSector(symbol)
@@ -551,35 +570,7 @@ func (ts *TrendStrategy) OnBar(
 		return nil // no breakout
 	}
 
-	// 1b. EMA crossover confirmation
-	emaFast := features.EMA(candles, cfg.EMAFast)
-	emaSlow := features.EMA(candles, cfg.EMASlow)
-	if emaFast == nil || emaSlow == nil {
-		return nil
-	}
-
-	emaCrossLong := false
-	emaCrossShort := false
-
-	// Check if EMA fast > slow AND crossed above within last EMAConfirmBars
-	if emaFast[idx] > emaSlow[idx] {
-		for i := max(1, idx-cfg.EMAConfirmBars+1); i <= idx; i++ {
-			if emaFast[i] > emaSlow[i] && emaFast[i-1] <= emaSlow[i-1] {
-				emaCrossLong = true
-				break
-			}
-		}
-	}
-	if emaFast[idx] < emaSlow[idx] {
-		for i := max(1, idx-cfg.EMAConfirmBars+1); i <= idx; i++ {
-			if emaFast[i] < emaSlow[i] && emaFast[i-1] >= emaSlow[i-1] {
-				emaCrossShort = true
-				break
-			}
-		}
-	}
-
-	// 1c. EMA trend filter (close vs EMA(50))
+	// 1b. EMA trend filter (close vs EMA(50))
 	emaTrend := features.EMA(candles, cfg.EMATrend)
 	if emaTrend == nil {
 		return nil
@@ -587,44 +578,12 @@ func (ts *TrendStrategy) OnBar(
 	trendLong := last.Close > emaTrend[idx]
 	trendShort := last.Close < emaTrend[idx]
 
-	// 1d. Volume confirmation
-	volRatio := features.VolumeRatio(candles, cfg.VolumePeriod)
-	if volRatio == nil {
-		return nil
-	}
-	volumeOK := volRatio[idx] > 1.0
-
 	// Combined Layer 1 signal
-	longSignal := donchianLong && emaCrossLong && trendLong && volumeOK
-	shortSignal := donchianShort && emaCrossShort && trendShort && volumeOK
+	longSignal := donchianLong && trendLong
+	shortSignal := donchianShort && trendShort
 
 	if !longSignal && !shortSignal {
 		return nil
-	}
-
-	// ---------------------------------------------------------------
-	// Whipsaw Defense (Patch 1)
-	// ---------------------------------------------------------------
-
-	// 1a. Candle Color Filter — prevent entering on weak closes
-	isGreenCandle := last.Close > last.Open
-	if longSignal && !isGreenCandle {
-		log.Debug().Str("symbol", symbol).Msg("whipsaw filter blocked LONG (red candle)")
-		return nil
-	}
-	if shortSignal && isGreenCandle {
-		log.Debug().Str("symbol", symbol).Msg("whipsaw filter blocked SHORT (green candle)")
-		return nil
-	}
-
-	// 1b. Dead Market Filter — BB Bandwidth < 10th percentile
-	bbWidth := features.BollingerBandwidth(candles, 20, 2.0)
-	if bbWidth != nil && len(bbWidth) > idx {
-		bbWidthPctile := features.RollingQuantile(bbWidth, 100, 0.10)
-		if bbWidthPctile != nil && len(bbWidthPctile) > idx && bbWidth[idx] < bbWidthPctile[idx] {
-			log.Debug().Str("symbol", symbol).Float64("bb_width", bbWidth[idx]).Float64("threshold", bbWidthPctile[idx]).Msg("dead market filter blocked signal")
-			return nil
-		}
 	}
 
 	// Single atomic check for all strategy-level gating conditions
@@ -870,7 +829,7 @@ func (ts *TrendStrategy) OnBar(
 		Msg("trend entry signal generated")
 
 	// Store size multiplier on the signal for downstream use
-	signal.Confidence = sizeMultiplier // repurpose Confidence as size multiplier
+	signal.SizeMultiplier = sizeMultiplier
 
 	return signal
 }
@@ -996,13 +955,13 @@ func (ts *TrendStrategy) getDynamicATRMultiplier(pos *TrendPosition, currentExtr
 	// Select multiplier based on profit level
 	switch {
 	case rMultiple > 6:
-		return 1.5
+		return 2.0
 	case rMultiple > 4:
 		return 2.0
 	case rMultiple > 2:
 		return 2.5
 	default:
-		return ts.config.ATRStopMult // 3.0 default
+		return ts.config.ATRStopMult
 	}
 }
 
@@ -1105,17 +1064,25 @@ func (ts *TrendStrategy) ApplyPartialExit(symbol string, exitSize float64, moveS
 
 // CheckDailyLossCap checks if the daily loss cap has been reached and halts
 // new entries if so. Does NOT close existing positions.
-func (ts *TrendStrategy) CheckDailyLossCap(equity float64) {
+// An optional unrealizedPnL can be passed to include open-position PnL in the check.
+func (ts *TrendStrategy) CheckDailyLossCap(equity float64, unrealizedPnL ...float64) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
 	ts.checkDailyReset()
 
+	totalPnL := ts.dailyPnL
+	if len(unrealizedPnL) > 0 {
+		totalPnL += unrealizedPnL[0]
+	}
+
 	capAmount := equity * ts.config.DailyLossCapPct
-	if ts.dailyPnL < -capAmount {
+	if totalPnL < -capAmount {
 		if !ts.dailyHalted {
 			log.Warn().
 				Float64("daily_pnl", ts.dailyPnL).
+				Float64("unrealized", totalPnL-ts.dailyPnL).
+				Float64("total", totalPnL).
 				Float64("cap", capAmount).
 				Msg("daily loss cap reached — halting new entries")
 			ts.dailyHalted = true
@@ -1129,6 +1096,45 @@ func (ts *TrendStrategy) GetDailyPnL() float64 {
 	defer ts.mu.Unlock()
 	ts.checkDailyReset()
 	return ts.dailyPnL
+}
+
+// ---------------------------------------------------------------------------
+// Portfolio Drawdown Circuit Breaker
+// ---------------------------------------------------------------------------
+
+// CheckPortfolioDrawdown checks if portfolio equity has breached the max drawdown threshold.
+// If breached, halts all new entries for DrawdownHaltHours.
+func (ts *TrendStrategy) CheckPortfolioDrawdown(currentEquity float64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if currentEquity > ts.peakEquity {
+		ts.peakEquity = currentEquity
+	}
+	if ts.peakEquity <= 0 {
+		return
+	}
+
+	drawdown := (ts.peakEquity - currentEquity) / ts.peakEquity
+	if drawdown >= ts.config.MaxDrawdownPct {
+		haltUntil := time.Now().Add(time.Duration(ts.config.DrawdownHaltHours) * time.Hour)
+		if haltUntil.After(ts.drawdownHaltUntil) {
+			ts.drawdownHaltUntil = haltUntil
+			log.Warn().
+				Float64("drawdown_pct", drawdown*100).
+				Float64("peak", ts.peakEquity).
+				Float64("current", currentEquity).
+				Time("halt_until", haltUntil).
+				Msg("portfolio drawdown circuit breaker triggered")
+		}
+	}
+}
+
+// IsDrawdownHalted returns true if the portfolio drawdown circuit breaker is active.
+func (ts *TrendStrategy) IsDrawdownHalted() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return time.Now().Before(ts.drawdownHaltUntil)
 }
 
 // ---------------------------------------------------------------------------
