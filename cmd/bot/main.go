@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -27,6 +32,8 @@ import (
 	"github.com/cgn175/quant-bot/internal/risk"
 	"github.com/cgn175/quant-bot/internal/sentiment"
 	"github.com/cgn175/quant-bot/internal/strategy"
+	fundingarb "github.com/cgn175/quant-bot/internal/strategy/funding_arb"
+	marketmaking "github.com/cgn175/quant-bot/internal/strategy/market_making"
 )
 
 var (
@@ -80,6 +87,12 @@ func run(cmd *cobra.Command, args []string) error {
 	// Branch: trend_following strategy bypasses ONNX / ML entirely.
 	if cfg.IsTrendFollowing() {
 		return runTrendFollowing(cmd, cfg)
+	}
+	if cfg.Strategy.Type == "market_making" {
+		return runMarketMaking(cmd, cfg)
+	}
+	if cfg.Strategy.Type == "funding_arb" {
+		return runFundingArb(cmd, cfg)
 	}
 
 	return runMLStrategy(cmd, cfg)
@@ -276,10 +289,11 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 	}
 
 	execConfig := execution.Config{
-		Mode:           cfg.Mode,
-		UseLimitOrders: cfg.Execution.UseLimitOrders,
-		SlippageBP:     cfg.Execution.SlippageBP,
-		FeePercent:     feePercent,
+		Mode:                     cfg.Mode,
+		UseLimitOrders:           cfg.Execution.UseLimitOrders,
+		AggressiveLimitTimeoutMs: cfg.Execution.AggressiveLimitTimeoutMs,
+		SlippageBP:               cfg.Execution.SlippageBP,
+		FeePercent:               feePercent,
 	}
 	execEngine := execution.NewEngine(execConfig, executor)
 
@@ -362,7 +376,9 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 	// ------------------------------------------------------------------ //
 	//  Exchange client                                                    //
 	// ------------------------------------------------------------------ //
-	exchangeClient := exchange.NewBinanceClient(cfg.Exchange.Testnet)
+	//  Exchange client                                                    //
+	// ------------------------------------------------------------------ //
+	var exchangeClient exchange.Client = exchange.NewBinanceClient(cfg.Exchange.Testnet)
 	defer exchangeClient.Close()
 
 	// ------------------------------------------------------------------ //
@@ -452,8 +468,18 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		store:      store,
 	}
 	alertMgr.SetStatusProvider(statusProvider)
-	alertMgr.StartCommandListener(ctx)
-	defer alertMgr.Stop()
+	alertMgr.SetStatsCompareFunc(func() (string, error) {
+		return compareStrategiesStats(execEngine, cfg.Strategy.Type)
+	})
+
+	// Only start command listener if explicitly enabled (prevents duplicate responses when running multiple bots)
+	if cfg.Alerts.EnableTelegramCommands {
+		alertMgr.StartCommandListener(ctx)
+		defer alertMgr.Stop()
+		log.Info().Msg("telegram command listener enabled")
+	} else {
+		log.Info().Msg("telegram command listener disabled - only alerts will be sent")
+	}
 
 	// Wait for shutdown
 	<-ctx.Done()
@@ -705,7 +731,7 @@ func closeTrendPosition(sym string, exitPrice float64, reason string, d trendDep
 	}
 
 	start := time.Now()
-	order, err := d.execEngine.ClosePosition(sym, pos.Side, exitPrice, pos.Size, reason, strategy.SignalNone, pos.EntryPrice, pos.EntryTime)
+	order, err := d.execEngine.ClosePosition(sym, pos.Side, exitPrice, pos.Size, reason, strategy.SignalNone, "trend_following", pos.EntryPrice, pos.EntryTime)
 	d.prom.OrderExecutionTime.Observe(time.Since(start).Seconds())
 
 	if err != nil {
@@ -726,7 +752,7 @@ func closeTrendPosition(sym string, exitPrice float64, reason string, d trendDep
 		d.alertMgr.Error("Close Position State Desync", fmt.Errorf("symbol=%s: order filled but ClosePosition failed: %w", sym, err))
 		d.trendStrat.RecordPnL(0) // unknown PnL
 		d.trendStrat.RemovePosition(sym)
-		d.prom.TotalTrades.Inc()
+		// Metrics updated by engine automatically
 		d.prom.PositionSize.WithLabelValues(sym).Set(0)
 		d.prom.UnrealizedPnLPerSymbol.WithLabelValues(sym).Set(0)
 		return
@@ -736,12 +762,7 @@ func closeTrendPosition(sym string, exitPrice float64, reason string, d trendDep
 	d.trendStrat.RecordPnL(netPnL)
 	d.trendStrat.RemovePosition(sym)
 
-	d.prom.TotalTrades.Inc()
-	if netPnL > 0 {
-		d.prom.WinningTrades.Inc()
-	} else if netPnL < 0 {
-		d.prom.LosingTrades.Inc()
-	}
+	// Metrics updated by engine automatically
 	d.prom.PositionSize.WithLabelValues(sym).Set(0)
 	d.prom.UnrealizedPnLPerSymbol.WithLabelValues(sym).Set(0)
 
@@ -769,7 +790,7 @@ func handleTrendPartialExit(sym string, currentPrice float64, partial *strategy.
 
 	// Close partial size
 	start := time.Now()
-	order, err := d.execEngine.ClosePosition(sym, pos.Side, currentPrice, exitSize, partial.Reason, strategy.SignalNone, pos.EntryPrice, pos.EntryTime)
+	order, err := d.execEngine.ClosePosition(sym, pos.Side, currentPrice, exitSize, partial.Reason, strategy.SignalNone, "trend_following", pos.EntryPrice, pos.EntryTime)
 	d.prom.OrderExecutionTime.Observe(time.Since(start).Seconds())
 
 	if err != nil {
@@ -862,7 +883,7 @@ func logTrendTick(sym string, candles []exchange.Candle, d trendDepsBundle) {
 
 // fetchAndUpdateFunding fetches funding rates via a single bulk API call
 // and updates the cache for the configured symbols.
-func fetchAndUpdateFunding(client *exchange.BinanceClient, symbols []string, cache *data.FundingCache) {
+func fetchAndUpdateFunding(client exchange.Client, symbols []string, cache *data.FundingCache) {
 	allRates, err := client.FetchAllFundingRates()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to fetch bulk funding rates")
@@ -1004,10 +1025,11 @@ func runMLStrategy(cmd *cobra.Command, cfg *config.Config) error {
 	}
 
 	execConfig := execution.Config{
-		Mode:           cfg.Mode,
-		UseLimitOrders: cfg.Execution.UseLimitOrders,
-		SlippageBP:     cfg.Execution.SlippageBP,
-		FeePercent:     feePercent,
+		Mode:                     cfg.Mode,
+		UseLimitOrders:           cfg.Execution.UseLimitOrders,
+		AggressiveLimitTimeoutMs: cfg.Execution.AggressiveLimitTimeoutMs,
+		SlippageBP:               cfg.Execution.SlippageBP,
+		FeePercent:               feePercent,
 	}
 	execEngine := execution.NewEngine(execConfig, executor)
 
@@ -1067,7 +1089,8 @@ func runMLStrategy(cmd *cobra.Command, cfg *config.Config) error {
 	// ------------------------------------------------------------------ //
 	//  7. Exchange client                                                 //
 	// ------------------------------------------------------------------ //
-	exchangeClient := exchange.NewBinanceClient(cfg.Exchange.Testnet)
+
+	var exchangeClient exchange.Client = exchange.NewBinanceClient(cfg.Exchange.Testnet)
 	defer exchangeClient.Close()
 
 	// ------------------------------------------------------------------ //
@@ -1154,6 +1177,9 @@ func runMLStrategy(cmd *cobra.Command, cfg *config.Config) error {
 
 	// Close any remaining open positions gracefully.
 	closeAllPositions(riskMgr, execEngine, alertMgr)
+
+	// Save stats on shutdown
+	saveStats(execEngine, "trend_following")
 
 	alertMgr.BotStopped("graceful shutdown complete")
 	log.Info().Msg("shutdown complete")
@@ -1326,7 +1352,7 @@ func handleExitCheck(sym string, fv *features.FeatureVector, d processSymbolDeps
 		Msg("closing position")
 
 	start := time.Now()
-	order, err := d.execEngine.ClosePosition(sym, pos.Side, fv.Close, pos.Size, reason, strategy.SignalNone, pos.EntryPrice, pos.EntryTime)
+	order, err := d.execEngine.ClosePosition(sym, pos.Side, fv.Close, pos.Size, reason, strategy.SignalNone, "ml", pos.EntryPrice, pos.EntryTime)
 	d.prom.OrderExecutionTime.Observe(time.Since(start).Seconds())
 
 	if err != nil {
@@ -1346,13 +1372,7 @@ func handleExitCheck(sym string, fv *features.FeatureVector, d processSymbolDeps
 		return
 	}
 
-	// Update metrics
-	d.prom.TotalTrades.Inc()
-	if netPnL > 0 {
-		d.prom.WinningTrades.Inc()
-	} else if netPnL < 0 {
-		d.prom.LosingTrades.Inc()
-	}
+	// Metrics updated by engine automatically
 	d.prom.PositionSize.WithLabelValues(sym).Set(0)
 	d.prom.UnrealizedPnLPerSymbol.WithLabelValues(sym).Set(0)
 
@@ -1471,7 +1491,7 @@ func handleExitCheck4H(sym string, fv *features.FeatureVector4H, d processSymbol
 		Msg("closing position (4h)")
 
 	start := time.Now()
-	order, err := d.execEngine.ClosePosition(sym, pos.Side, fv.Close, pos.Size, reason, strategy.SignalNone, pos.EntryPrice, pos.EntryTime)
+	order, err := d.execEngine.ClosePosition(sym, pos.Side, fv.Close, pos.Size, reason, strategy.SignalNone, "ml", pos.EntryPrice, pos.EntryTime)
 	d.prom.OrderExecutionTime.Observe(time.Since(start).Seconds())
 
 	if err != nil {
@@ -1716,7 +1736,7 @@ func closeAllPositions(riskMgr *risk.Manager, execEngine *execution.Engine, aler
 			}
 		}
 
-		_, err := execEngine.ClosePosition(sym, pos.Side, exitPrice, pos.Size, "shutdown", strategy.SignalNone, pos.EntryPrice, pos.EntryTime)
+		_, err := execEngine.ClosePosition(sym, pos.Side, exitPrice, pos.Size, "shutdown", strategy.SignalNone, "shutdown", pos.EntryPrice, pos.EntryTime)
 		if err != nil {
 			log.Error().Err(err).Str("symbol", sym).Msg("failed to close position on shutdown")
 			continue
@@ -1735,4 +1755,353 @@ func closeAllPositions(riskMgr *risk.Manager, execEngine *execution.Engine, aler
 
 		alertMgr.TradeClosed(sym, pos.Side, pos.EntryPrice, exitPrice, pos.Size, pnl, "shutdown")
 	}
+}
+
+// runMarketMaking implements the pure market making bot loop.
+func runMarketMaking(cmd *cobra.Command, cfg *config.Config) error {
+	ctx, cancel := context.WithCancel(cmd.Context())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		select {
+		case sig := <-sigCh:
+			log.Info().Str("signal", sig.String()).Msg("received shutdown signal")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	// Exchange client
+	var exchangeClient exchange.Client = exchange.NewBinanceClient(cfg.Exchange.Testnet)
+	defer exchangeClient.Close()
+
+	// Executor
+	var executor execution.Executor
+	feePercent := cfg.Execution.FeePercent()
+	if cfg.Mode == "live" {
+		executor = execution.NewLiveExecutor(cfg.Exchange.APIKey, cfg.Exchange.APISecret, cfg.Exchange.Testnet)
+		log.Info().Msg("using live trading executor")
+	} else {
+		executor = execution.NewPaperExecutor(cfg.Execution.SlippageBP, feePercent)
+		log.Info().Msg("using paper trading executor")
+	}
+
+	// Execution Engine
+	execConfig := execution.Config{
+		Mode:           cfg.Mode,
+		UseLimitOrders: true, // MM always uses limit orders
+		SlippageBP:     cfg.Execution.SlippageBP,
+		FeePercent:     feePercent,
+		// No aggressive timeout for MM — it manages its own orders
+	}
+	execEngine := execution.NewEngine(execConfig, executor)
+
+	// Metrics
+	prom := metrics.NewMetrics()
+	execEngine.SetMetrics(prom)
+
+	// Start Prometheus metrics server for MM
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Info().Int("port", cfg.Monitoring.PrometheusPort).Msg("starting prometheus metrics server")
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.Monitoring.PrometheusPort), nil); err != nil {
+			log.Error().Err(err).Msg("prometheus server failed")
+		}
+	}()
+
+	// Strategy
+	strat := marketmaking.NewStrategy(cfg.Strategy.MarketMaking, exchangeClient, executor, execEngine, cfg.Symbols)
+
+	// Block until context cancelled
+	if err := strat.Start(ctx); err != nil {
+		return err
+	}
+
+	<-ctx.Done()
+
+	// Save stats on shutdown
+	saveStats(execEngine, "market_making")
+
+	log.Info().Msg("market making strategy stopped")
+	return nil
+}
+
+// runFundingArb implements the funding rate arbitrage bot loop.
+func runFundingArb(cmd *cobra.Command, cfg *config.Config) error {
+	ctx, cancel := context.WithCancel(cmd.Context())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		select {
+		case sig := <-sigCh:
+			log.Info().Str("signal", sig.String()).Msg("received shutdown signal")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	// Exchange client
+	var exchangeClient exchange.Client = exchange.NewBinanceClient(cfg.Exchange.Testnet)
+	defer exchangeClient.Close()
+
+	// Executor
+	var executor execution.Executor
+	feePercent := cfg.Execution.FeePercent()
+	if cfg.Mode == "live" {
+		executor = execution.NewLiveExecutor(cfg.Exchange.APIKey, cfg.Exchange.APISecret, cfg.Exchange.Testnet)
+		log.Info().Msg("using live trading executor")
+	} else {
+		executor = execution.NewPaperExecutor(cfg.Execution.SlippageBP, feePercent)
+		log.Info().Msg("using paper trading executor")
+	}
+
+	// Execution Engine
+	execConfig := execution.Config{
+		Mode:       cfg.Mode,
+		SlippageBP: cfg.Execution.SlippageBP,
+		FeePercent: feePercent,
+	}
+	execEngine := execution.NewEngine(execConfig, executor)
+
+	// Metrics
+	prom := metrics.NewMetrics()
+	execEngine.SetMetrics(prom)
+
+	// Start Prometheus metrics server for Funding Arb
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Info().Int("port", cfg.Monitoring.PrometheusPort).Msg("starting prometheus metrics server")
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.Monitoring.PrometheusPort), nil); err != nil {
+			log.Error().Err(err).Msg("prometheus server failed")
+		}
+	}()
+
+	// Strategy
+	strat := fundingarb.NewStrategy(cfg.Strategy.FundingArb, exchangeClient, executor, execEngine, cfg.Symbols)
+
+	// Block until context cancelled
+	if err := strat.Start(ctx); err != nil {
+		return err
+	}
+
+	<-ctx.Done()
+
+	// Save stats on shutdown
+	saveStats(execEngine, "funding_arb")
+
+	log.Info().Msg("funding arb strategy stopped")
+	return nil
+}
+
+// saveStats dumps trade statistics to a JSON file.
+func saveStats(engine *execution.Engine, strategyName string) {
+	stats := engine.GetTradeStatsByStrategy("") // get all trades for this run
+
+	// Create a map to hold the stats + metadata
+	output := map[string]interface{}{
+		"strategy":       strategyName,
+		"timestamp":      time.Now().Format(time.RFC3339),
+		"total_trades":   stats.TotalTrades,
+		"winning_trades": stats.WinCount,
+		"losing_trades":  stats.LossCount,
+		"win_rate":       stats.WinRate * 100, // as percentage
+		"total_pnl":      stats.NetPnL,
+		"avg_pnl":        stats.AvgPnL,
+		"profit_factor":  stats.ProfitFactor,
+	}
+
+	filename := fmt.Sprintf("stats_%s_%d.json", strategyName, time.Now().Unix())
+	file, err := os.Create(filename)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create stats file")
+		return
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(output); err != nil {
+		log.Error().Err(err).Msg("failed to write stats to file")
+		return
+	}
+
+	log.Info().Str("file", filename).Msg("saved strategy stats")
+}
+
+// strategyStats holds scraped metrics data
+type strategyStats struct {
+	Strategy      string
+	TotalTrades   float64
+	WinningTrades float64
+	LosingTrades  float64
+	WinRate       float64
+	TotalPnL      float64
+	ProfitFactor  float64
+}
+
+// compareStrategiesStats scrapes metrics from all running bots and returns a formatted comparison.
+func compareStrategiesStats(engine *execution.Engine, strategyName string) (string, error) {
+	// Define ports for known strategies
+	ports := map[string]int{
+		"trend_following": 9090,
+		"market_making":   9091,
+		"funding_arb":     9092,
+	}
+
+	var allStats []strategyStats
+
+	for strat, port := range ports {
+		// Log attempt
+		// log.Debug().Str("strategy", strat).Int("port", port).Msg("scraping metrics")
+
+		data, err := scrapeMetrics(port)
+		if err != nil {
+			// If we fail to scrape trend strategy (self) but we have engine, maybe we could fallback?
+			// But since we are running metrics server, self-scrape should work.
+			// For others, if they are not running, we skip.
+			// log.Warn().Err(err).Str("strategy", strat).Int("port", port).Msg("failed to scrape metrics")
+			continue
+		}
+		data.Strategy = strat
+		allStats = append(allStats, *data)
+	}
+
+	if len(allStats) == 0 {
+		return "⚠️ No active strategies found (or metrics unscrapeable)", nil
+	}
+
+	// Sort by strategy name
+	sort.Slice(allStats, func(i, j int) bool {
+		return allStats[i].Strategy < allStats[j].Strategy
+	})
+
+	// Build comparison table (escape for Telegram MarkdownV2)
+	var lines []string
+	lines = append(lines, "*📊 Live Strategy Comparison*")
+	lines = append(lines, "")
+
+	for _, stats := range allStats {
+		trades := int(stats.TotalTrades)
+		wins := int(stats.WinningTrades)
+		losses := int(stats.LosingTrades)
+
+		// Calculate Win Rate if not provided or 0
+		winRatePct := stats.WinRate * 100
+		if stats.WinRate == 0 && trades > 0 {
+			winRatePct = (float64(wins) / float64(trades)) * 100
+		}
+
+		pnlEmoji := "💰"
+		if stats.TotalPnL < 0 {
+			pnlEmoji = "📉"
+		}
+
+		avgPnL := 0.0
+		if trades > 0 {
+			avgPnL = stats.TotalPnL / float64(trades)
+		}
+
+		lines = append(lines, fmt.Sprintf("*%s*", escapeMarkdownV2Telegram(stats.Strategy)))
+		lines = append(lines, fmt.Sprintf("  Trades: %d \\(Win: %d, Loss: %d\\)", trades, wins, losses))
+		lines = append(lines, fmt.Sprintf("  Win Rate: %.1f%%", winRatePct))
+		lines = append(lines, fmt.Sprintf("  %s Total PnL: $%.2f", pnlEmoji, stats.TotalPnL))
+		lines = append(lines, fmt.Sprintf("  Avg PnL: $%.2f", avgPnL))
+		if stats.ProfitFactor > 0 {
+			lines = append(lines, fmt.Sprintf("  Profit Factor: %.2f", stats.ProfitFactor))
+		}
+		lines = append(lines, "")
+	}
+
+	return strings.Join(lines, "\n"), nil
+}
+
+// scrapeMetrics fetches prometheus metrics from the given port and parses key trading stats
+func scrapeMetrics(port int) (*strategyStats, error) {
+	url := fmt.Sprintf("http://localhost:%d/metrics", port)
+	client := http.Client{Timeout: 500 * time.Millisecond}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bad status: %d", resp.StatusCode)
+	}
+
+	stats := &strategyStats{}
+	scanner := bufio.NewScanner(resp.Body)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+
+		key := parts[0]
+		valStr := parts[1]
+
+		val, err := strconv.ParseFloat(valStr, 64)
+		if err != nil {
+			continue
+		}
+
+		// Match metric names from internal/metrics/prometheus.go
+		switch key {
+		case "trading_total_trades":
+			stats.TotalTrades = val
+		case "trading_winning_trades":
+			stats.WinningTrades = val
+		case "trading_losing_trades":
+			stats.LosingTrades = val
+		case "trading_realized_pnl":
+			stats.TotalPnL = val
+		case "trading_win_rate":
+			stats.WinRate = val
+		case "trading_profit_factor":
+			stats.ProfitFactor = val
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
+// escapeMarkdownV2Telegram escapes special characters for Telegram MarkdownV2 in comparison text.
+func escapeMarkdownV2Telegram(s string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`_`, `\_`,
+		`*`, `\*`,
+		`[`, `\[`,
+		`]`, `\]`,
+		`(`, `\(`,
+		`)`, `\)`,
+		`~`, `\~`,
+		"`", "\\`",
+		`>`, `\>`,
+		`#`, `\#`,
+		`+`, `\+`,
+		`-`, `\-`,
+		`=`, `\=`,
+		`|`, `\|`,
+		`{`, `\{`,
+		`}`, `\}`,
+		`.`, `\.`,
+		`!`, `\!`,
+	)
+	return replacer.Replace(s)
 }

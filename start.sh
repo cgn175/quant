@@ -6,18 +6,29 @@ ML_PORT=9001
 SENTIMENT_PORT=8000
 ML_LOG="logs/ml_server.log"
 SENTIMENT_LOG="logs/sentiment_server.log"
-BOT_LOG="logs/bot.log"
-CONFIG_FILE="config.yaml"
+
+# Bot configs and logs
+CONFIG_TREND="config.trend.yaml"
+LOG_TREND="logs/bot_trend.log"
+
+CONFIG_MM="config.mm.yaml"
+LOG_MM="logs/bot_mm.log"
+
+CONFIG_FUNDING="config.funding.yaml"
+LOG_FUNDING="logs/bot_funding.log"
 
 # Cleanup function
 cleanup() {
     echo "Stopping services..."
-    if [ -n "$ML_PID" ]; then
-        kill $ML_PID 2>/dev/null || true
-    fi
-    if [ -n "$SENTIMENT_PID" ]; then
-        kill $SENTIMENT_PID 2>/dev/null || true
-    fi
+    # Kill bots
+    if [ -n "$PID_TREND" ]; then kill $PID_TREND 2>/dev/null || true; fi
+    if [ -n "$PID_MM" ]; then kill $PID_MM 2>/dev/null || true; fi
+    if [ -n "$PID_FUNDING" ]; then kill $PID_FUNDING 2>/dev/null || true; fi
+    
+    # Kill servers
+    if [ -n "$ML_PID" ]; then kill $ML_PID 2>/dev/null || true; fi
+    if [ -n "$SENTIMENT_PID" ]; then kill $SENTIMENT_PID 2>/dev/null || true; fi
+    
     exit 0
 }
 
@@ -40,7 +51,7 @@ kill_port() {
     fi
 }
 
-echo "=== Starting Quant Bot, ML Server & Sentiment Server ==="
+echo "=== Starting Quant Bot Cluster (Trend, MM, Funding) ==="
 
 # 1. Kill any existing servers
 if check_port $ML_PORT; then
@@ -85,6 +96,7 @@ while ! curl -s "http://localhost:$ML_PORT/health" >/dev/null; do
         cleanup
         exit 1
     fi
+    sleep 1
 done
 echo "✅ ML Server is ready!"
 
@@ -100,13 +112,29 @@ while ! curl -s "http://localhost:$SENTIMENT_PORT/health" >/dev/null; do
         echo "Continuing anyway (sentiment is optional)..."
         break
     fi
+    sleep 1
 done
 echo "✅ Sentiment Server is ready!"
 
-# 7. Start Go Bot
-echo "Starting Bot (logging to $BOT_LOG)..."
+# 7. Start Bots in Parallel
+echo "🚀 Starting Trend Following Bot..."
+./bin/bot -c $CONFIG_TREND > $LOG_TREND 2>&1 &
+PID_TREND=$!
+echo "   PID: $PID_TREND | Log: $LOG_TREND"
+
+echo "🚀 Starting Market Making Bot..."
+./bin/bot -c $CONFIG_MM > $LOG_MM 2>&1 &
+PID_MM=$!
+echo "   PID: $PID_MM | Log: $LOG_MM"
+
+echo "🚀 Starting Funding Arbitrage Bot..."
+./bin/bot -c $CONFIG_FUNDING > $LOG_FUNDING 2>&1 &
+PID_FUNDING=$!
+echo "   PID: $PID_FUNDING | Log: $LOG_FUNDING"
+
+echo "=== All systems operational ==="
 echo "Press Ctrl+C to stop all services."
+echo "View logs: tail -f logs/bot_*.log"
 
-./bin/bot -c $CONFIG_FILE | tee $BOT_LOG
-
-# ...existing code...
+# Wait for all processes to exit
+wait $PID_TREND $PID_MM $PID_FUNDING $ML_PID $SENTIMENT_PID

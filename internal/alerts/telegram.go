@@ -55,6 +55,9 @@ type SentimentProvider interface {
 	GetSentimentData(symbol string) map[string]interface{}
 }
 
+// StatsCompareFn is a function type that saves current stats and returns a comparison string.
+type StatsCompareFn func() (string, error)
+
 // Manager handles telegram alerts
 type Manager struct {
 	mu                sync.Mutex
@@ -67,6 +70,7 @@ type Manager struct {
 	startTime         time.Time
 	statusProvider    StatusProvider
 	sentimentProvider SentimentProvider
+	statsCompareFn    StatsCompareFn
 	cancelFunc        context.CancelFunc
 }
 
@@ -121,6 +125,13 @@ func (m *Manager) SetSentimentProvider(provider SentimentProvider) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sentimentProvider = provider
+}
+
+// SetStatsCompareFunc sets the stats comparison function for the /status command.
+func (m *Manager) SetStatsCompareFunc(fn StatsCompareFn) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statsCompareFn = fn
 }
 
 // StartCommandListener starts listening for Telegram commands in a background goroutine.
@@ -256,6 +267,18 @@ _Status provider not configured_`,
 			escapeMarkdownV2(formatDuration(uptime)),
 			memMB,
 		)
+	}
+
+	// Add strategy comparison stats if available
+	m.mu.Lock()
+	statsCompareFn := m.statsCompareFn
+	m.mu.Unlock()
+
+	if statsCompareFn != nil {
+		if comparison, err := statsCompareFn(); err == nil && comparison != "" {
+			// Append comparison to status message
+			statusMsg += "\n\n" + comparison
+		}
 	}
 
 	reply := tgbotapi.NewMessage(msg.Chat.ID, statusMsg)

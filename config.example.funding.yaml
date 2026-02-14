@@ -1,0 +1,26 @@
+mode: paper
+
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+
+exchange:
+  name: binance
+  testnet: true
+
+strategy:
+  type: funding_arb
+  funding_arb:
+    min_funding_rate: 0.0005    # Enter when funding > 0.05% per 8h (~54% APY)
+    exit_threshold: 0.0001      # Exit when funding drops below 0.01% per 8h
+    max_positions: 3            # Max 3 concurrent positions
+    position_size_usd: 1000     # $1000 per position
+    scan_interval_ms: 300000    # Check every 5 minutes
+
+execution:
+  slippage_bp: 5
+  fee_percent: 0.04
+
+monitoring:
+  prometheus_port: 9092

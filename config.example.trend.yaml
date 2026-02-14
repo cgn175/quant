@@ -1,0 +1,63 @@
+mode: paper
+
+exchange:
+  name: binance
+  testnet: true
+  api_key: "YOUR_API_KEY"
+  api_secret: "YOUR_API_SECRET"
+
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+
+strategy:
+  type: trend_following
+  trend_following:
+    donchian_period: 20
+    ema_fast: 9
+    ema_slow: 21
+    ema_confirm_bars: 5
+    ema_trend: 50
+    volume_period: 20
+    atr_period: 14
+    atr_stop_multiplier: 3.0
+    adx_period: 14
+    adx_threshold: 20.0
+    volatility_low: 0.5
+    volatility_high: 2.5
+    chandelier_lookback: 10
+
+    funding_filter:
+      enabled: false
+
+    partial_exits:
+      enabled: true
+      first_target_r: 3.0
+      first_exit_pct: 0.25
+      second_target_r: 6.0
+      second_exit_pct: 0.25
+
+risk:
+  max_risk_per_trade_pct: 1.0
+  max_daily_loss_pct: 3.0
+  max_open_positions: 4
+  max_leverage: 2.0
+  initial_equity: 10000.0
+
+execution:
+  use_limit_orders: true  # Use new aggressive limit orders
+  aggressive_limit_timeout_ms: 3000
+  slippage_bp: 5.0
+  fee_percent: 0.04
+
+storage:
+  candle_db_path: "data/candles_trend.db"
+  max_db_rows: 2000
+
+monitoring:
+  prometheus_port: 9090
+
+alerts:
+  telegram_bot_token: ""     # Telegram bot token from @BotFather
+  telegram_chat_id: 0        # Your Telegram chat ID
+  enable_telegram_commands: true # Set to true for the main bot instance, false for others to avoid duplicate responses

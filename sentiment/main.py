@@ -81,6 +81,9 @@ fetchers = {
     "telegram": TelegramFetcher(),
 }
 
+analyzer = get_analyzer(logger)
+logger.info("FinBERT model loaded successfully")
+
 # Insights generator
 insights_generator = InsightsGenerator()
 
@@ -220,7 +223,6 @@ async def root():
 @app.get("/health", response_model=HealthResponse)
 async def health():
     try:
-        analyzer = get_analyzer()
         return HealthResponse(status="ok", model_loaded=True)
     except Exception:
         return HealthResponse(status="degraded", model_loaded=False)
@@ -359,11 +361,41 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=lookback_hours)
 
-        # Gather posts from all sources using fetcher_manager
-        posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
+        # Gather fresh posts from live sources
+        live_posts = await fetcher_manager.fetch_for_symbol(symbol, limit=200)
+        live_posts = [p for p in live_posts if p.timestamp >= cutoff]
 
-        # Filter to lookback window
-        posts = [p for p in posts if p.timestamp >= cutoff]
+        # Also load historical posts from DB for the full lookback window
+        db_rows = await sentiment_db.get_fetched_posts(
+            symbol=symbol, hours=lookback_hours
+        )
+        db_posts = [
+            Post(
+                text=row["text"],
+                source=row["source"],
+                symbol=symbol,
+                timestamp=row["timestamp"],
+                score=row.get("score", 0),
+            )
+            for row in db_rows
+        ]
+
+        # Merge and deduplicate (prefer live posts, dedup by text)
+        seen_texts: set[str] = set()
+        posts: list[Post] = []
+        for p in live_posts:
+            key = p.text.strip()[:200]
+            if key not in seen_texts:
+                seen_texts.add(key)
+                posts.append(p)
+        for p in db_posts:
+            key = p.text.strip()[:200]
+            if key not in seen_texts:
+                seen_texts.add(key)
+                posts.append(p)
+
+        # Sort by timestamp descending
+        posts.sort(key=lambda p: p.timestamp, reverse=True)
 
         if not posts:
             raise HTTPException(
@@ -372,10 +404,12 @@ async def get_sentiment_insights(symbol: str, lookback_hours: int = 24):
             )
 
         # Analyze sentiment
-        analyzer = get_analyzer()
         texts = [p.text for p in posts]
         sentiments = analyzer.analyze(texts)
-
+        logger.info(
+            f"Sentiment analysis for {symbol}: {len(posts)} posts "
+            f"(live={len(live_posts)}, db={len(db_posts)})"
+        )
         # Persist raw predictions (best-effort)
         try:
             raw_preds = []
@@ -612,7 +646,6 @@ async def compute_sentiment(symbol: str) -> dict:
         }
 
     logger.info(f"Analyzing {len(posts)} posts with FinBERT for {symbol}...")
-    analyzer = get_analyzer()
     texts = [p.text for p in posts]
     sentiments = analyzer.analyze(texts)
     logger.info(f"FinBERT analysis complete for {symbol}")
@@ -855,8 +888,6 @@ async def startup():
     logger.info("Starting Sentiment Microservice")
     logger.info("=" * 60)
     logger.info("Initializing FinBERT model...")
-    get_analyzer()
-    logger.info("FinBERT model loaded successfully")
 
     logger.info(f"Configured fetchers: {', '.join(fetchers.keys())}")
     logger.info("Starting background tasks...")
@@ -1007,7 +1038,6 @@ async def compute_market_sentiment() -> dict:
         }
     # Analyze sentiment with FinBERT
     logger.info(f"Analyzing {len(posts)} market posts with FinBERT...")
-    analyzer = get_analyzer()
     texts = [p.text for p in posts]
     sentiments = analyzer.analyze(texts)
     logger.info("Market sentiment FinBERT analysis complete")
@@ -1145,7 +1175,6 @@ async def backfill_symbol_history(symbol: str, cutoff: datetime):
     if not posts:
         return
 
-    analyzer = get_analyzer()
     texts = [p.text for p in posts]
     sentiments = analyzer.analyze(texts)
 

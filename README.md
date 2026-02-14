@@ -1,315 +1,126 @@
-# Quant Bot 🤖📈
+<p align="center">
+  <img src="https://raw.githubusercontent.com/cgn175/quant-bot/main/assets/logo.png" alt="Quant Bot Logo" width="200"/>
+</p>
 
-A crypto **trend-following trading bot** targeting BTCUSDT, ETHUSDT, SOLUSDT, and BNBUSDT on Binance using 4H candles. It is currently configured for **paper trading**.
+# Quant Bot
 
-## Overview
+[![Go Report Card](https://goreportcard.com/badge/github.com/cgn175/quant-bot)](https://goreportcard.com/report/github.com/cgn175/quant-bot)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Docker Image](https://img.shields.io/docker/pulls/cgn175/quant-bot.svg)](https://hub.docker.com/r/cgn175/quant-bot)
 
-The system consists of:
-- **Go trading engine** for live/paper execution, strategy logic, risk management, and backtesting
-- **Python ML microservice** for:
-  - **Regime classification** (“Traffic Light”) — when it is safe to trade
-  - **Volatility prediction** — used to size dynamic stop-losses
-- **(Optional) Sentiment microservice** (FastAPI + FinBERT) for news/social sentiment
+**Quant Bot** is a high-performance, modular crypto trading bot written in Go. Inspired by [Hummingbot](https://hummingbot.org)'s architecture but built for specific high-frequency and trend-following capabilities, it allows users to run automated trading strategies including Market Making, Trend Following, and ML-enhanced signals on centralized exchanges like Binance.
 
-Core strategy is **Plan D — Pure Trend Following**:
-- Donchian breakout + EMA(9/21) crossover + EMA(50) trend filter
-- Volume and “dead market” filters (Bollinger band squeeze, candle color, etc.)
-- Optional ML-based regime filter and dynamic stop-loss width
-- Strict risk management with ATR/dynamic stops, trailing exits, partial profit-taking, and daily loss caps
+## 📚 Table of Contents
+- [Features](#features)
+- [Strategies](#strategies)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Architecture](#architecture)
+- [Disclaimer](#disclaimer)
 
-### Runtime workflow (high level)
+## ✨ Features
+- **Multi-Strategy Support**: Run pure Market Making, Trend Following (Plan D), or ML-based strategies.
+- **Exchange Agnostic**: Core interface allows easy integration of new exchanges (currently supports Binance Spot/Futures).
+- **Paper Trading**: Built-in paper exchange for safe testing of strategies without real funds.
+- **Risk Management**: Configurable risk engine with daily loss caps, max drawdown protection, and position sizing.
+- **ML Integration**: Optional Python microservice for ONNX-based market regime classification and volatility prediction.
+- **Telegram Alerts**: Real-time notifications for trades, order fills, and risk events.
 
-- Ingest 4H candles from Binance (via REST/WS) and persist to SQLite.
-- On each new candle, build features and evaluate **Plan D** trend rules.
-- Optionally call the **ML server** for regime and volatility predictions.
-- Apply risk rules (position sizing, daily loss caps, max positions/correlation) and execute via paper or live engine.
-- Continuously update trailing stops, partial exits, metrics, and Telegram alerts.
+## 🤖 Strategies / Agents
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         QUANT BOT                               │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────┐    ┌──────────┐    ┌──────────────┐   ┌────────┐ │
-│  │ Exchange │───▶│ Features │───▶│  Plan D      │──▶│  Risk  │ │
-│  │  WS/REST │    │  Builder │    │  Strategy    │   │ Manager│ │
-│  └──────────┘    └──────────┘    └──────────────┘   └────────┘ │
-│       │                │             ▲   ▲               │      │
-│       │                │             │   │               ▼      │
-│       │          ┌─────┴─────┐  ┌────┴──────┐   ┌────────────┐  │
-│       │          │  ML Regime│  │ ML Vol    │   │ Execution  │  │
-│       │          │ /predict_ │  │ /predict_ │   │  Engine    │  │
-│       │          │  regime   │  │ volatility│   └────────────┘  │
-│       │          └───────────┘  └───────────┘          │        │
-│       ▼                                                ▼        │
-│  ┌──────────┐                                   ┌──────────────┐│
-│  │  Data    │                                   │ Metrics/     ││
-│  │  Store   │                                   │ Alerts       ││
-│  └──────────┘                                   └──────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-```
+See [AGENTS.md](AGENTS.md) for detailed personalities and configurations.
 
-## Features
+### 1. Market Making (`market_making`)
+Advanced inventory-aware market making.
+- **Inventory Skew**: Shifts quotes to offload inventory risk (Avellaneda-Stoikov).
+- **Dynamic Spreads**: Widens spreads in high volatility.
+- **Configuration**: See `config.example.mm.yaml`.
 
-- **4H trend-following strategy** (“Plan D”) with Donchian breakout + EMA confirmations + volume/volatility filters
-- **Optional ML regime filter** (RandomForest “Traffic Light”) to avoid DANGER_ZONE conditions
-- **Optional dynamic stop-loss** based on predicted next-candle range
-- **Strict risk controls**: per-trade risk, daily loss cap, max open positions, sector correlation guard
-- **Paper & live modes** with the same strategy logic (default is paper)
-- **Backtesting engine** with detailed metrics (PnL, Sharpe, drawdown, R-multiples)
-- **Prometheus metrics** and **Telegram alerts** for monitoring
+### 2. Trend Following (`trend_following`)
+Plan D trend following system.
+- **Aggressive Limit Orders**: Tries to enter at best price, minimizing fees.
+- **Trailing Stop**: Chandelier Exit to lock in profits.
+- **Configuration**: See `config.example.trend.yaml`.
 
-## Project Structure
+### 3. Funding Arbitrage (`funding_arb`)
+Delta-neutral yield farming.
+- **Logic**: Shorts Perps when funding is high to collect carry.
+- **Auto-Exit**: Closes when funding normalizes.
+- **Configuration**: See `config.example.funding.yaml`.
 
-```text
-quant/
-├── cmd/                                # Go binary entry points
-│   ├── bot/                            # Main bot binary
-│   ├── backtest/                       # Standalone backtester
-│   ├── analyze_predictions/            # Prediction analysis tool
-│   └── test_model/                     # Model testing tool
-│
-├── internal/                           # Go core packages
-│   ├── config/                         # Config structs + viper loading
-│   ├── strategy/                       # Plan D trend logic, features, tests
-│   ├── mlfilter/                       # HTTP client for ML microservice
-│   ├── exchange/                       # Binance REST + WebSocket client
-│   ├── data/                           # SQLite candle store + funding cache
-│   ├── features/                       # TA indicators + feature builders
-│   ├── execution/                      # Paper/live execution engines
-│   ├── risk/                           # Position sizing + risk limits
-│   ├── backtest/                       # Offline backtester
-│   ├── metrics/                        # Prometheus metrics
-│   ├── alerts/                         # Telegram notifications
-│   ├── model/                          # Legacy XGBoost/ONNX inference (disabled)
-│   └── sentiment/                      # Legacy sentiment microservice client
-│
-├── ml/                                 # Python ML training & inference
-│   ├── server.py                       # HTTP server: /predict_regime, /predict_volatility
-│   ├── regime/                         # Regime classifier (Traffic Light)
-│   ├── volatility/                     # Volatility predictor (Dynamic Stop-Loss)
-│   └── models/                         # Saved model files
-│
-├── scripts/                            # Research & utility scripts (Python)
-├── sentiment/                          # Optional sentiment microservice (FastAPI + FinBERT)
-├── data/                               # Runtime data (SQLite candles, training DB)
-├── docs/                               # Design & analysis docs
-├── config.yaml                         # Active configuration
-├── docker-compose.yaml                 # Bot + ML server (+ sentiment) stack
-└── Dockerfile.bot                      # Go bot container
-```
+### 4. ML-Enhanced (`ml`)
+Uses external Python inference service for regime classification.
 
-## Technology Stack
+## 🚀 Installation
 
-### Go trading bot
-
-| Component  | Library                    |
-|-----------|----------------------------|
-| Config    | `spf13/viper`, `spf13/cobra` |
-| Logging   | `rs/zerolog`               |
-| Exchange  | Custom Binance client (REST + WS) |
-| Metrics   | `prometheus/client_golang` |
-| Alerts    | `go-telegram-bot-api`      |
-
-### Python ML microservice
-
-| Component | Library / Tool |
-|----------|-----------------|
-| API      | FastAPI / Uvicorn |
-| Models   | scikit-learn (RandomForest, Huber/Ridge, etc.) |
-| Data     | pandas, numpy   |
-
-### Sentiment service (optional)
-
-| Component | Library |
-|----------|---------|
-| API      | FastAPI |
-| NLP      | Transformers (FinBERT) |
-| Twitter  | tweepy |
-| Reddit   | praw |
-
-## Quick Start
-
-### 1. Clone and build
-
+### Using Docker (Recommended)
 ```bash
-git clone https://github.com/yourusername/quant-bot.git
-cd quant-bot
-
-# Build Go bot
-go build -o bin/bot ./cmd/bot
+docker run -d --name quant-bot \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/data:/app/data \
+  cgn175/quant-bot:latest
 ```
 
-### 2. Configure
+### From Source
+**Prerequisites:** Go 1.21+
 
-Edit `config.yaml` (key sections only shown here):
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/cgn175/quant-bot.git
+   cd quant-bot
+   ```
+2. Build the binary:
+   ```bash
+   go build -o bot ./cmd/bot
+   ```
 
-```yaml
-mode: paper  # NEVER set to "live" unless you know what you're doing
-
-exchange:
-  name: binance
-  testnet: false
-  api_key: "your-api-key"
-  api_secret: "your-api-secret"
-
-symbols:
-  - BTCUSDT
-  - ETHUSDT
-  - SOLUSDT
-  - BNBUSDT
-
-strategy:
-  type: trend_following
-  regime_filter:
-    enabled: false     # true to use ML Traffic Light
-  dynamic_stop:
-    enabled: false     # true to use ML volatility-based stops
-  ml_filter:
-    enabled: false     # legacy directional model (keep disabled)
-
-risk:
-  max_risk_per_trade_pct: 1.0
-  max_daily_loss_pct: 3.0
-  max_open_positions: 4
-```
-
-### 3. Run the ML server (recommended)
-
+## ⚙️ Configuration
+Copy the example config and edit it:
 ```bash
-# From repo root
-python3 ml/server.py --models-dir ml/models
+cp config.yaml.example config.yaml
 ```
 
-### 4. Run the bot
+Key configuration sections:
+- **Exchange**: API keys and environment (Testnet/Mainnet).
+- **Strategy**: Select `type` (`market_making` or `trend_following`) and tune parameters.
+- **Risk**: Set `max_daily_loss_pct`, `max_risk_per_trade_pct`.
+- **Execution**: Enable `use_limit_orders` for Maker strategies.
 
+See `config.example.mm.yaml` for a Market Making configuration example.
+
+## 🖥️ Usage
+
+**Run in Paper Mode (Default):**
 ```bash
-# Paper trading on 4H candles
-./bin/bot -c config.yaml
+./bot --config config.yaml
 ```
 
-### 5. (Optional) Docker Compose
-
+**Run in Live Mode:**
+Set `mode: live` in `config.yaml` or pass as env var `QUANT_MODE=live`.
 ```bash
-# Start bot + ML server (+ optional sentiment)
-docker-compose up -d
-
-# View bot logs
-docker-compose logs -f bot
+./bot --config config.yaml
 ```
 
-## Trading Workflow
-
-```mermaid
-flowchart LR
-    A[4H Market Data] --> B[Feature Builder]
-    B --> C[Plan D Trend Rules]
-    C --> D{ML Regime Filter?}
-    D -->|Disabled or SAFE| E{ML Volatility?}
-    D -->|DANGER_ZONE| H[Skip Trade]
-    E -->|Disabled| F[ATR-based Stop/Size]
-    E -->|Enabled| G[Dynamic Stop/Size]
-    F --> I{Risk Check}
-    G --> I
-    I -->|Pass| J[Execute Order (paper/live)]
-    I -->|Fail| H
-    J --> K[Trailing Stop & Partials]
-```
-
-### Signal generation
-
-1. **Feature extraction**: Donchian channels, EMA(9/21/50), ATR, RSI, Bollinger Bands, volume ratios, funding rates, time-of-day features, etc.
-2. **Plan D rules**: mechanical breakout + trend confirmation + volume/whipsaw defenses (no directional ML prediction).
-3. **Optional ML filters**:
-   - Regime classifier decides if conditions are SAFE_TO_TRADE.
-   - Volatility model predicts next-candle range to set dynamic stop width.
-4. **Risk validation**: per-trade risk, daily loss cap, max open positions, sector correlation checks.
-
-### Position management
-
-- **Entry**: Orders sized by risk, with initial ATR/dynamic stop and profit targets.
-- **Exit**: Chandelier-style trailing stops with partial exits at multiple R-multiples.
-- **Sizing**: `size = (equity × risk_pct) / (entry_price × stop_distance_pct)`.
-
-## Monitoring
-
-### Automated ML Retraining
-
-A comprehensive pipeline (`scripts/retrain_pipeline.py`) automates the ML lifecycle:
-- **Fetch**: Incremental data ingestion from Binance
-- **Train**: Retrains all model variants (Regime v1/v2, Volatility v1)
-- **Evaluate**: Compares new models against live baselines (AUC/MAE gates)
-- **Deploy**: Atomic swap with rollback on failure
-- **Notify**: Telegram alerts and Prometheus metrics
-
-To enable (runs daily at 2am UTC):
+### Strategy Comparison
+Compare performance across multiple strategies:
 ```bash
-0 2 * * * cd /path/to/quant && python3 scripts/retrain_pipeline.py run >> logs/retrain.log 2>&1
+python3 compare_strategies.py
 ```
+Generates a consolidated report of Win Rate, PnL, and Sharpe Ratio.
 
-### Prometheus metrics
+### Bot Commands
+The bot supports a Telegram interface for management:
+- `/status`: View current PnL, open positions, and equity.
+- `/stop`: Gracefully stop the bot (cancel open orders, close positions if configured).
 
-Examples (names may vary slightly):
-- `quant_equity` — current account equity
-- `quant_daily_pnl` — daily realized PnL
-- `quant_open_positions` — number of open positions
-- `quant_strategy_trades_total` — trades by symbol/direction
+## Pb Architecture
+Quant Bot follows a Clean Architecture / Hexagonal pattern:
+- **Domain**: Core entities (`Order`, `Trade`, `Candle`) and interfaces (`Exchange`, `Executor`).
+- **Application**: Strategy logic and Risk Management.
+- **Infrastructure**: Concrete implementations for Binance, SQLite, Telegram, etc.
 
-### Telegram alerts
+This separation allows for easy unit testing and swapping of components (e.g., switching from Binance to Hyperliquid).
 
-- Bot start/stop
-- Trade opened/closed with PnL and R-multiple
-- Daily PnL summary and loss cap breaches
-- (Optional) regime changes and ML/server health
-
-## Backtesting
-
-```bash
-# Go backtester
-go build -o backtest ./cmd/backtest
-./backtest -c config.yaml
-
-# Python-side research backtest
-python3 scripts/backtest_trend.py
-```
-
-Outputs typically include:
-- Equity curve, Sharpe ratio, max drawdown
-- Per-symbol stats and R-distribution
-- Regime and volatility behavior vs outcomes
-
-## Configuration Reference (selected)
-
-| Section                     | Key                          | Description                                   | Example |
-|----------------------------|------------------------------|-----------------------------------------------|---------|
-| `mode`                     | -                            | `paper` or `live`                             | `paper` |
-| `symbols`                  | -                            | Trading pairs                                 | `[BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT]` |
-| `strategy.type`            | -                            | Active strategy type                          | `trend_following` |
-| `strategy.regime_filter`   | `enabled`                    | Use ML Traffic Light filter                   | `false` |
-| `strategy.dynamic_stop`    | `enabled`                    | Use ML volatility-based stops                 | `false` |
-| `strategy.ml_filter`       | `enabled`                    | Legacy directional ML (keep `false`)          | `false` |
-| `risk.max_risk_per_trade_pct` | -                         | Max risk per trade (% of equity)             | `1.0` |
-| `risk.max_daily_loss_pct`  | -                            | Daily loss cap (% of equity)                  | `3.0` |
-| `risk.max_open_positions`  | -                            | Max simultaneous positions                     | `4` |
-
-## Development
-
-```bash
-# Go: build & test
-go build ./...
-go test ./...
-
-# Python ML: train models
-python3 ml/regime/train_regime.py
-python3 ml/volatility/train_volatility.py
-
-# Start ML server
-python3 ml/server.py --models-dir ml/models
-```
-
-## Risk Disclaimer
-
-⚠️ **This software is for educational purposes only.** Trading cryptocurrencies involves substantial risk of loss. Past performance does not guarantee future results. Never trade with money you cannot afford to lose.
-
-## License
-
-MIT License — see `LICENSE` for details.
+## ⚠️ Disclaimer
+This software is for educational purposes only. Do not risk money which you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.

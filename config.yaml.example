@@ -93,8 +93,9 @@ monitoring:
   prometheus_port: 9090
 
 alerts:
-  telegram_bot_token: ""   # Telegram bot token from @BotFather
-  telegram_chat_id: 0      # Your Telegram chat ID
+  telegram_bot_token: ""     # Telegram bot token from @BotFather
+  telegram_chat_id: 0        # Your Telegram chat ID
+  enable_telegram_commands: true # Set to true for the main bot instance, false for others to avoid duplicate responses
 
 # Legacy ML settings (kept for backward compatibility, not used by trend_following)
 sentiment:

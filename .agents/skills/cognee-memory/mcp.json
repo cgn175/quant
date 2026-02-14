@@ -1,0 +1,6 @@
+{
+  "cognee": {
+    "command": "bash",
+    "args": ["/Users/hoangta/projects/cognee/cognee-mcp/start_mcp.sh"]
+  }
+}

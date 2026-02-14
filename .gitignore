@@ -26,6 +26,8 @@ Thumbs.db
 
 # Config with real credentials
 config.yaml
+config.*.yaml
+!config.example*
 # (keep config.yaml.example as a template with empty values)
 
 # Python

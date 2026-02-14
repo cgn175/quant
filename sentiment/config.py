@@ -13,13 +13,13 @@ class Settings(BaseSettings):
     coingecko_api_key: str = ""
     cryptopanic_api_key: str = ""
     newsapi_key: str = ""
-    
+
     # New API keys
     coinmarketcap_api_key: str = ""
     marketaux_api_key: str = ""
     finnhub_api_key: str = ""
     fmp_api_key: str = ""
-    
+
     # Telegram API credentials (get from https://my.telegram.org/apps)
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     sentiment_history_hours: int = 24
 
     model_name: str = "burakutf/finetuned-finbert-crypto"
+    model_offline: bool = True
 
     class Config:
         env_file = ".env"

@@ -1,0 +1,24 @@
+mode: paper
+
+exchange:
+  name: binance
+  testnet: false
+  api_key: "YOUR_API_KEY"
+  api_secret: "YOUR_API_SECRET"
+
+symbols:
+  - BTCUSDT
+
+strategy:
+  type: market_making
+  market_making:
+    spread_pct: 0.001 # 0.1%
+    order_amount: 0.001
+    refresh_time_ms: 1000 # 1s for quick test
+
+execution:
+  slippage_bp: 0
+  fee_percent: 0.04
+
+monitoring:
+  prometheus_port: 9091 # different port to avoid conflict

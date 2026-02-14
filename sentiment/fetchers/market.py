@@ -51,12 +51,6 @@ async def fetch_market_telegram(fetcher, limit: int = 50) -> List[Post]:
     for msg in messages:
         text_lower = msg['text'].lower()
         
-        # Check if message is crypto-related (general filter)
-        is_crypto = any(kw in text_lower for kw in GENERAL_CRYPTO_KEYWORDS)
-        
-        if not is_crypto:
-            continue
-        
         # Extract sentiment score
         score = fetcher._extract_sentiment_score(msg['text'])
         

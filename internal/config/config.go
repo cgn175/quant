@@ -67,9 +67,10 @@ type ModelConfig struct {
 }
 
 type ExecutionConfig struct {
-	UseLimitOrders bool    `mapstructure:"use_limit_orders"`
-	SlippageBP     float64 `mapstructure:"slippage_bp"`
-	FeePercentVal  float64 `mapstructure:"fee_percent"`
+	UseLimitOrders           bool    `mapstructure:"use_limit_orders"`
+	AggressiveLimitTimeoutMs int     `mapstructure:"aggressive_limit_timeout_ms"` // timeout before market fallback (0 = no fallback)
+	SlippageBP               float64 `mapstructure:"slippage_bp"`
+	FeePercentVal            float64 `mapstructure:"fee_percent"`
 }
 
 // FeePercent returns the configured fee percentage (e.g. 0.1 means 0.1%).
@@ -86,8 +87,9 @@ type MonitoringConfig struct {
 }
 
 type AlertsConfig struct {
-	TelegramBotToken string `mapstructure:"telegram_bot_token"`
-	TelegramChatID   int64  `mapstructure:"telegram_chat_id"`
+	TelegramBotToken       string `mapstructure:"telegram_bot_token"`
+	TelegramChatID         int64  `mapstructure:"telegram_chat_id"`
+	EnableTelegramCommands bool   `mapstructure:"enable_telegram_commands"` // only one bot should have this enabled when running multiple bots
 }
 
 // StrategyConfig holds strategy-specific settings.
@@ -112,6 +114,8 @@ type StrategyConfig struct {
 	MLFilter              MLFilterConfig      `mapstructure:"ml_filter"`
 	RegimeFilter          RegimeFilterConfig  `mapstructure:"regime_filter"`
 	DynamicStop           DynamicStopConfig   `mapstructure:"dynamic_stop"`
+	MarketMaking          MarketMakingConfig  `mapstructure:"market_making"`
+	FundingArb            FundingArbConfig    `mapstructure:"funding_arb"`
 	Variant               string              `mapstructure:"variant"`
 }
 
@@ -172,6 +176,31 @@ type PartialExitsConfig struct {
 	FirstExitPct  float64 `mapstructure:"first_exit_pct"`
 	SecondTargetR float64 `mapstructure:"second_target_r"`
 	SecondExitPct float64 `mapstructure:"second_exit_pct"`
+}
+
+// MarketMakingConfig holds parameters for the pure market making strategy.
+type MarketMakingConfig struct {
+	SpreadPct     float64 `mapstructure:"spread_pct"`      // Base spread from mid-price (e.g., 0.001 = 0.1%)
+	OrderAmount   float64 `mapstructure:"order_amount"`    // Size of bid/ask orders in base asset
+	RefreshTimeMs int     `mapstructure:"refresh_time_ms"` // How often to cancel & replace orders
+
+	// Inventory risk management (Avellaneda-Stoikov skewing)
+	Gamma        float64 `mapstructure:"gamma"`         // Risk aversion parameter (higher = more aggressive skew)
+	MaxInventory float64 `mapstructure:"max_inventory"` // Max absolute inventory before halting one side
+
+	// Dynamic spread (volatility-adjusted)
+	MinSpreadPct float64 `mapstructure:"min_spread_pct"` // Floor for dynamic spread
+	MaxSpreadPct float64 `mapstructure:"max_spread_pct"` // Ceiling for dynamic spread
+	VolLookback  int     `mapstructure:"vol_lookback"`   // Rolling window for volatility calculation
+}
+
+// FundingArbConfig holds parameters for the funding rate arbitrage strategy.
+type FundingArbConfig struct {
+	MinFundingRate  float64 `mapstructure:"min_funding_rate"`  // Minimum abs funding rate to enter (e.g., 0.0005 = 0.05%)
+	ExitThreshold   float64 `mapstructure:"exit_threshold"`    // Close when abs funding drops below this
+	MaxPositions    int     `mapstructure:"max_positions"`     // Max concurrent funding arb positions
+	PositionSizeUSD float64 `mapstructure:"position_size_usd"` // USD value per position
+	ScanIntervalMs  int     `mapstructure:"scan_interval_ms"`  // How often to check funding rates
 }
 
 // StorageConfig holds data persistence configuration.
@@ -365,6 +394,23 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.dynamic_stop.min_stop_pct", 0.01)
 	v.SetDefault("strategy.dynamic_stop.max_stop_pct", 0.04)
 	v.SetDefault("strategy.variant", "")
+
+	// Market Making defaults
+	v.SetDefault("strategy.market_making.spread_pct", 0.005)      // 0.5%
+	v.SetDefault("strategy.market_making.order_amount", 0.01)     // 0.01 BTC/ETH
+	v.SetDefault("strategy.market_making.refresh_time_ms", 10000) // 10s
+	v.SetDefault("strategy.market_making.gamma", 0.1)             // inventory skew intensity
+	v.SetDefault("strategy.market_making.max_inventory", 1.0)     // max 1 unit net inventory
+	v.SetDefault("strategy.market_making.min_spread_pct", 0.001)  // 0.1% floor
+	v.SetDefault("strategy.market_making.max_spread_pct", 0.02)   // 2% ceiling
+	v.SetDefault("strategy.market_making.vol_lookback", 20)       // 20-tick rolling window
+
+	// Funding arb defaults
+	v.SetDefault("strategy.funding_arb.min_funding_rate", 0.0005) // 0.05% per 8h
+	v.SetDefault("strategy.funding_arb.exit_threshold", 0.0001)   // 0.01% per 8h
+	v.SetDefault("strategy.funding_arb.max_positions", 3)
+	v.SetDefault("strategy.funding_arb.position_size_usd", 1000.0) // $1000 per position
+	v.SetDefault("strategy.funding_arb.scan_interval_ms", 300000)  // 5 minutes
 
 	// Storage defaults
 	v.SetDefault("storage.candle_db_path", "candles.db")
