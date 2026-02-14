@@ -70,10 +70,10 @@ func (s *Strategy) Start(ctx context.Context) error {
 }
 
 func (s *Strategy) runLoop(ctx context.Context) {
-	// Check funding rates on a regular interval (default: every 5 minutes)
+	// Check funding rates on a regular interval (default: every 8 hours to match funding period)
 	scanInterval := time.Duration(s.cfg.ScanIntervalMs) * time.Millisecond
 	if scanInterval <= 0 {
-		scanInterval = 5 * time.Minute
+		scanInterval = 8 * time.Hour
 	}
 
 	ticker := time.NewTicker(scanInterval)
@@ -203,6 +203,20 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 	// 2. Funding has flipped (we'd be paying instead of collecting)
 	shouldClose := false
 	reason := ""
+
+	// Check max loss per position (directional risk protection)
+	if s.cfg.MaxLossPct > 0 {
+		var pricePnLPct float64
+		if pos.Side == "SHORT" {
+			pricePnLPct = (pos.EntryPrice - markPrice) / pos.EntryPrice
+		} else {
+			pricePnLPct = (markPrice - pos.EntryPrice) / pos.EntryPrice
+		}
+		if pricePnLPct < -s.cfg.MaxLossPct {
+			shouldClose = true
+			reason = "max_loss"
+		}
+	}
 
 	absFunding := math.Abs(currentFunding)
 	if absFunding < s.cfg.ExitThreshold {

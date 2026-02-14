@@ -12,11 +12,12 @@ exchange:
 strategy:
   type: funding_arb
   funding_arb:
-    min_funding_rate: 0.0005    # Enter when funding > 0.05% per 8h (~54% APY)
-    exit_threshold: 0.0001      # Exit when funding drops below 0.01% per 8h
+    min_funding_rate: 0.0001    # Enter when funding > 0.01% per 8h (~13% APY)
+    exit_threshold: 0.00005     # Exit when funding drops below 0.005% per 8h
     max_positions: 3            # Max 3 concurrent positions
     position_size_usd: 1000     # $1000 per position
     scan_interval_ms: 300000    # Check every 5 minutes
+    max_loss_pct: 0.03          # Close if position loses > 3% (no spot hedge = directional risk)
 
 execution:
   slippage_bp: 5

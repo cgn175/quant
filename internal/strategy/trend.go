@@ -197,6 +197,7 @@ type TrendPosition struct {
 	PartialStage   int     // 0=none, 1=first partial done, 2=second partial done
 	SizeMultiplier float64 // 1.0 or 0.5 (from funding filter)
 	Pending        bool    // true if this is a reservation (order not yet filled)
+	BarsSinceEntry int     // counts closed bars since entry
 }
 
 // CurrentR returns the current profit in R-multiples.
@@ -908,6 +909,29 @@ func (ts *TrendStrategy) UpdateTrailingStop(
 						pos.TrailingStop = newStop
 					}
 				}
+			}
+		}
+	}
+
+	// Increment bar counter on closed bars
+	if last.IsClosed {
+		pos.BarsSinceEntry++
+	}
+
+	// Time-based exit: close dead positions after 10 bars with minimal profit
+	// A position is "dead" if it hasn't reached at least 0.5R after 10 bars
+	if pos.BarsSinceEntry >= 10 {
+		currentR := pos.CurrentR(last.Close)
+		if currentR < 0.5 {
+			log.Debug().
+				Str("symbol", symbol).
+				Int("bars_since_entry", pos.BarsSinceEntry).
+				Float64("current_r", currentR).
+				Msg("time stop triggered - closing dead position")
+			return &ExitSignal{
+				Symbol: symbol,
+				Reason: "time_stop",
+				Price:  last.Close,
 			}
 		}
 	}

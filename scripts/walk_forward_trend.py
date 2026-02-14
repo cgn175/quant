@@ -337,7 +337,7 @@ def main():
         backtest_kwargs={
             "initial_equity": 10_000,
             "risk_per_trade": 0.01,
-            "atr_stop_mult": 3.0,
+            "atr_stop_mult": 2.5,
             "max_leverage": 2.0,
             "max_daily_loss": 0.03,
         },

@@ -1,0 +1,45 @@
+================================================================================
+FILTER ABLATION STUDY — Plan D Trend Following
+================================================================================
+
+Loading data...
+  Loaded BTC/USDT: 13,139 bars
+  Loaded ETH/USDT: 13,139 bars
+  Loaded SOL/USDT: 12,044 bars
+  Loaded BNB/USDT: 13,139 bars
+
+  Baseline                 — Sharpe 1.02, 1823 trades (3.4s)
+  +ADX                     — Sharpe 1.18, 1364 trades (2.9s)
+  +Volatility              — Sharpe 1.02, 1823 trades (3.3s)
+  +Funding                 — Sharpe 1.17, 1753 trades (3.2s)
+  +EMA crossover           — Sharpe 0.35, 847 trades (2.5s)
+  +Volume                  — Sharpe 1.10, 1743 trades (3.1s)
+  +ADX +Volatility         — Sharpe 1.18, 1364 trades (2.8s)
+  +ADX +Funding            — Sharpe 1.33, 1307 trades (2.8s)
+  All filters              — Sharpe 1.45, 427 trades (2.2s)
+
+===============================================================================================
+Filter Variant           | Sharpe |   WR% |    PF | Trades | MaxDD% |  Return% | ΔSharpe
+-----------------------------------------------------------------------------------------------
+Baseline                 |   1.02 |  35.4 |  1.12 |   1823 |  23.04 |   +116.5 |       —
++ADX                     |   1.18 |  35.5 |  1.15 |   1364 |  26.35 |   +101.7 |   +0.15
++Volatility              |   1.02 |  35.4 |  1.12 |   1823 |  23.04 |   +116.5 |   +0.00
++Funding                 |   1.17 |  35.4 |  1.14 |   1753 |  23.17 |   +138.0 |   +0.14
++EMA crossover           |   0.35 |  34.2 |  1.03 |    847 |  27.27 |     +9.5 |   -0.67
++Volume                  |   1.10 |  35.6 |  1.14 |   1743 |  23.56 |   +124.3 |   +0.08
++ADX +Volatility         |   1.18 |  35.5 |  1.15 |   1364 |  26.35 |   +101.7 |   +0.15
++ADX +Funding            |   1.33 |  35.7 |  1.18 |   1307 |  24.49 |   +116.4 |   +0.31
+All filters              |   1.45 |  36.3 |  1.22 |    427 |  23.65 |    +36.2 |   +0.43
+===============================================================================================
+
+RECOMMENDATIONS (filters improving Sharpe by > 0.1):
+--------------------------------------------------
+  ✅ +ADX                      ΔSharpe = +0.15
+  ✅ +Funding                  ΔSharpe = +0.14
+  ✅ +ADX +Volatility          ΔSharpe = +0.15
+  ✅ +ADX +Funding             ΔSharpe = +0.31
+  ✅ All filters               ΔSharpe = +0.43
+
+FILTERS HURTING performance (Sharpe drop > 0.1):
+--------------------------------------------------
+  ❌ +EMA crossover            ΔSharpe = -0.67
