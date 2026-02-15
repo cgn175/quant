@@ -117,6 +117,10 @@ type StrategyConfig struct {
 	MarketMaking          MarketMakingConfig  `mapstructure:"market_making"`
 	FundingArb            FundingArbConfig    `mapstructure:"funding_arb"`
 	Variant               string              `mapstructure:"variant"`
+
+	// Time-based exit parameters
+	TimeStopBars int     `mapstructure:"time_stop_bars"`  // Exit if position hasn't moved MinR after N bars
+	TimeStopMinR float64 `mapstructure:"time_stop_min_r"` // Minimum R required to avoid time stop
 }
 
 // MLFilterConfig holds ML inference filter parameters.
