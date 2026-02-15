@@ -26,14 +26,14 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 # Symbols to backtest - easily extensible
+# NOTE: Only includes symbols that perform well in mean reversion backtests
+# Removed: AVAX (21% WR), FET (35% WR), ADA (50% WR), BNB (44% WR), XRP (53% WR)
 DEFAULT_SYMBOLS = {
     "BTC/USDT": "BTC_USDT_4h_2190d.parquet",
     "ETH/USDT": "ETH_USDT_4h_2190d.parquet",
     "SOL/USDT": "SOL_USDT_4h_2190d.parquet",
-    "BNB/USDT": "BNB_USDT_4h_2190d.parquet",
     "NEAR/USDT": "NEAR_USDT_4h_2190d.parquet",
     "EGLD/USDT": "EGLD_USDT_4h_2190d.parquet",
-    "XRP/USDT": "XRP_USDT_4h_2190d.parquet",
 }
 
 # ---------------------------------------------------------------------------
