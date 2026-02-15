@@ -122,6 +122,16 @@ type BacktestStats struct {
 	MaxDrawdown     float64
 	SharpeRatio     float64
 	TotalDaysTraded int
+	Expectancy      float64
+	ExpectancyPct   float64
+	AvgWin          float64
+	AvgLoss         float64
+	AvgWinLossRatio float64
+	SortinoRatio    float64
+	CalmarRatio     float64
+	MaxConsecLosses int
+	TotalFees       float64
+	CAGR            float64
 }
 
 // NewEngine creates a new backtest engine (5m mode by default)
@@ -551,19 +561,28 @@ func (e *Engine) computeStats() {
 
 	totalWins := 0.0
 	totalLosses := 0.0
+	consecLosses := 0
+	maxConsecLosses := 0
 
 	for _, trade := range e.trades {
 		e.stats.GrossPnL += trade.GrossPnL
 		e.stats.NetPnL += trade.NetPnL
+		e.stats.TotalFees += trade.GrossPnL - trade.NetPnL
 
 		if trade.NetPnL > 0 {
 			e.stats.WinningTrades++
 			totalWins += trade.NetPnL
+			consecLosses = 0
 		} else if trade.NetPnL < 0 {
 			e.stats.LosingTrades++
 			totalLosses -= trade.NetPnL // make positive
+			consecLosses++
+			if consecLosses > maxConsecLosses {
+				maxConsecLosses = consecLosses
+			}
 		}
 	}
+	e.stats.MaxConsecLosses = maxConsecLosses
 
 	e.stats.WinRate = float64(e.stats.WinningTrades) / float64(e.stats.TotalTrades)
 
@@ -577,6 +596,23 @@ func (e *Engine) computeStats() {
 		e.stats.AvgPnL = e.stats.NetPnL / float64(e.stats.TotalTrades)
 	}
 
+	// AvgWin / AvgLoss / AvgWinLossRatio
+	if e.stats.WinningTrades > 0 {
+		e.stats.AvgWin = totalWins / float64(e.stats.WinningTrades)
+	}
+	if e.stats.LosingTrades > 0 {
+		e.stats.AvgLoss = -totalLosses / float64(e.stats.LosingTrades) // negative number
+	}
+	if e.stats.AvgLoss != 0 {
+		e.stats.AvgWinLossRatio = math.Abs(e.stats.AvgWin / e.stats.AvgLoss)
+	}
+
+	// Expectancy
+	e.stats.Expectancy = e.stats.AvgPnL
+	if e.stats.InitialEquity > 0 {
+		e.stats.ExpectancyPct = e.stats.AvgPnL / e.stats.InitialEquity * 100
+	}
+
 	// Compute max drawdown
 	e.stats.MaxDrawdown = e.computeMaxDrawdown()
 
@@ -587,6 +623,20 @@ func (e *Engine) computeStats() {
 	if !e.stats.StartTime.IsZero() && !e.stats.EndTime.IsZero() {
 		e.stats.TotalDaysTraded = int(e.stats.EndTime.Sub(e.stats.StartTime).Hours() / 24)
 	}
+
+	// CAGR
+	if e.stats.TotalDaysTraded > 0 && e.stats.InitialEquity > 0 {
+		years := float64(e.stats.TotalDaysTraded) / 365.0
+		e.stats.CAGR = math.Pow(e.stats.FinalEquity/e.stats.InitialEquity, 1.0/years) - 1.0
+	}
+
+	// CalmarRatio = CAGR / MaxDrawdown
+	if e.stats.MaxDrawdown > 0 {
+		e.stats.CalmarRatio = e.stats.CAGR / e.stats.MaxDrawdown
+	}
+
+	// Sortino ratio
+	e.stats.SortinoRatio = e.computeSortino()
 }
 
 // computeMaxDrawdown calculates max drawdown from peak equity
@@ -659,6 +709,49 @@ func (e *Engine) computeSharpe() float64 {
 	}
 
 	return (mean / stddev) * math.Sqrt(tradesPerYear)
+}
+
+// computeSortino calculates an annualized Sortino ratio (downside deviation only).
+func (e *Engine) computeSortino() float64 {
+	if len(e.trades) < 2 {
+		return 0
+	}
+
+	returns := make([]float64, len(e.trades))
+	for i, t := range e.trades {
+		if e.stats.InitialEquity > 0 {
+			returns[i] = t.NetPnL / e.stats.InitialEquity
+		}
+	}
+
+	sum := 0.0
+	for _, r := range returns {
+		sum += r
+	}
+	mean := sum / float64(len(returns))
+
+	// Downside deviation: only negative deviations from zero (MAR=0)
+	downsideSqSum := 0.0
+	for _, r := range returns {
+		if r < 0 {
+			downsideSqSum += r * r
+		}
+	}
+	downsideDev := math.Sqrt(downsideSqSum / float64(len(returns)))
+
+	if downsideDev == 0 {
+		return 0
+	}
+
+	tradesPerYear := 0.0
+	if e.stats.TotalDaysTraded > 0 {
+		tradesPerDay := float64(len(e.trades)) / float64(e.stats.TotalDaysTraded)
+		tradesPerYear = tradesPerDay * 365.0
+	} else {
+		tradesPerYear = 365.0 * 24.0
+	}
+
+	return (mean / downsideDev) * math.Sqrt(tradesPerYear)
 }
 
 // GetTrades returns all closed trades

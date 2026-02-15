@@ -30,15 +30,27 @@ Final Equity:    $%.2f
 Net PnL:         $%.2f (%.2f%%)
 Gross PnL:       $%.2f
 
+--- Performance ---
+CAGR:            %.2f%%
+Sharpe Ratio:    %.2f
+Sortino Ratio:   %.2f
+Calmar Ratio:    %.2f
+Max Drawdown:    %.2f%%
+
+--- Trading ---
 Total Trades:    %d
 Winning Trades:  %d
 Losing Trades:   %d
 Win Rate:        %.2f%%
 Profit Factor:   %.2f
-Avg PnL/Trade:   $%.2f
+Avg Winner:      $%.2f
+Avg Loser:       $%.2f
+Win/Loss Ratio:  %.2f
+Expectancy:      $%.2f (%.3f%%)
+Max Consec Losses: %d
 
-Max Drawdown:    %.2f%%
-Sharpe Ratio:    %.2f
+--- Costs ---
+Total Fees:      $%.2f
 ========================
 `,
 		r.stats.StartTime.Format("2006-01-02"),
@@ -49,14 +61,23 @@ Sharpe Ratio:    %.2f
 		r.stats.NetPnL,
 		((r.stats.FinalEquity-r.stats.InitialEquity)/r.stats.InitialEquity)*100,
 		r.stats.GrossPnL,
+		r.stats.CAGR*100,
+		r.stats.SharpeRatio,
+		r.stats.SortinoRatio,
+		r.stats.CalmarRatio,
+		r.stats.MaxDrawdown*100,
 		r.stats.TotalTrades,
 		r.stats.WinningTrades,
 		r.stats.LosingTrades,
 		r.stats.WinRate*100,
 		r.stats.ProfitFactor,
-		r.stats.AvgPnL,
-		r.stats.MaxDrawdown*100,
-		r.stats.SharpeRatio,
+		r.stats.AvgWin,
+		r.stats.AvgLoss,
+		r.stats.AvgWinLossRatio,
+		r.stats.Expectancy,
+		r.stats.ExpectancyPct,
+		r.stats.MaxConsecLosses,
+		r.stats.TotalFees,
 	)
 }
 
