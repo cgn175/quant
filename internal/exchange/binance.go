@@ -366,9 +366,10 @@ func (c *BinanceClient) pingLoop(conn *websocket.Conn, gen uint64) {
 			// Send ping with deadline
 			deadline := time.Now().Add(wsPongTimeout)
 			if err := conn.WriteControl(websocket.PingMessage, []byte{}, deadline); err != nil {
-				log.Warn().Err(err).Uint64("gen", gen).Msg("ws ping failed")
-				// Don't trigger reconnect from here — let the read loop handle it
-				// when it times out or gets an error
+				log.Warn().Err(err).Uint64("gen", gen).Msg("ws ping failed, triggering reconnect")
+				// Close the connection to unblock the readLoop, then reconnect
+				conn.Close()
+				go c.reconnectWithBackoff()
 				return
 			}
 			log.Debug().Uint64("gen", gen).Msg("ws ping sent")
