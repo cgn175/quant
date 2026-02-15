@@ -54,9 +54,37 @@ kill_port() {
     fi
 }
 
+# Check if a bot is already running with a specific config
+is_bot_running() {
+    local config=$1
+    pgrep -f "bin/bot.*--config.*$config" >/dev/null 2>&1
+}
+
+# Kill existing bot instances
+kill_existing_bots() {
+    echo "Checking for existing bot instances..."
+    local count=0
+    for config in "$CONFIG_TREND" "$CONFIG_MM" "$CONFIG_FUNDING"; do
+        if [ -n "$config" ]; then
+            local pids=$(pgrep -f "bin/bot.*--config.*$config" 2>/dev/null)
+            if [ -n "$pids" ]; then
+                echo "  Killing existing bot for $config (PIDs: $pids)..."
+                kill -9 $pids 2>/dev/null || true
+                count=$((count + 1))
+            fi
+        fi
+    done
+    if [ $count -gt 0 ]; then
+        sleep 2
+    fi
+}
+
 echo "=== Starting Quant Bot Cluster (Trend, MM, Funding) ==="
 
-# 1. Kill any existing servers
+# 1. Kill any existing bot instances to prevent duplicates
+kill_existing_bots
+
+# 2. Kill any existing servers
 if check_port $ML_PORT; then
     echo "Port $ML_PORT is in use. Stopping existing process..."
     kill_port $ML_PORT
@@ -67,14 +95,14 @@ if check_port $SENTIMENT_PORT; then
     kill_port $SENTIMENT_PORT
 fi
 
-# 2. Build Go bot
+# 3. Build Go bot
 echo "Building Go bot..."
 if ! go build -o bin/bot ./cmd/bot; then
     echo "❌ Go build failed!"
     exit 1
 fi
 
-# 3. Start ML Server
+# 4. Start ML Server
 echo "Starting ML Server (port $ML_PORT)..."
 python3 ml/server.py --models-dir ml/models > $ML_LOG 2>&1 &
 ML_PID=$!
