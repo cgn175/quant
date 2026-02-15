@@ -68,5 +68,18 @@ func BuildRegimeFeatures(
 		m["funding_24h_avg"] = 0.0
 	}
 
+	// --- sentiment features ---
+	if sent != nil {
+		m["sentiment_1h"] = sent.Score1h
+		m["sentiment_24h"] = sent.Score24h
+		m["sentiment_velocity"] = sent.Velocity
+		m["mentions_zscore"] = sent.MentionsZScore
+	} else {
+		m["sentiment_1h"] = 0.0
+		m["sentiment_24h"] = 0.0
+		m["sentiment_velocity"] = 0.0
+		m["mentions_zscore"] = 0.0
+	}
+
 	return m
 }
