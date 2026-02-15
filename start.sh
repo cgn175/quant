@@ -7,6 +7,9 @@ SENTIMENT_PORT=8000
 ML_LOG="logs/ml_server.log"
 SENTIMENT_LOG="logs/sentiment_server.log"
 
+# Create logs directory
+mkdir -p logs
+
 # Bot configs and logs
 CONFIG_TREND="config.trend.yaml"
 LOG_TREND="logs/bot_trend.log"
@@ -24,11 +27,11 @@ cleanup() {
     if [ -n "$PID_TREND" ]; then kill $PID_TREND 2>/dev/null || true; fi
     if [ -n "$PID_MM" ]; then kill $PID_MM 2>/dev/null || true; fi
     if [ -n "$PID_FUNDING" ]; then kill $PID_FUNDING 2>/dev/null || true; fi
-    
+
     # Kill servers
     if [ -n "$ML_PID" ]; then kill $ML_PID 2>/dev/null || true; fi
     if [ -n "$SENTIMENT_PID" ]; then kill $SENTIMENT_PID 2>/dev/null || true; fi
-    
+
     exit 0
 }
 
@@ -116,21 +119,33 @@ while ! curl -s "http://localhost:$SENTIMENT_PORT/health" >/dev/null; do
 done
 echo "✅ Sentiment Server is ready!"
 
-# 7. Start Bots in Parallel
-echo "🚀 Starting Trend Following Bot..."
-./bin/bot -c $CONFIG_TREND > $LOG_TREND 2>&1 &
-PID_TREND=$!
-echo "   PID: $PID_TREND | Log: $LOG_TREND"
+# 7. Start Bots in Parallel (only if configs exist)
+if [ -f "$CONFIG_TREND" ]; then
+    echo "🚀 Starting Trend Following Bot..."
+    ./bin/bot --config $CONFIG_TREND > $LOG_TREND 2>&1 &
+    PID_TREND=$!
+    echo "   PID: $PID_TREND | Log: $LOG_TREND | Config: $CONFIG_TREND"
+else
+    echo "⚠️  Skipping Trend Bot (config not found: $CONFIG_TREND)"
+fi
 
-echo "🚀 Starting Market Making Bot..."
-./bin/bot -c $CONFIG_MM > $LOG_MM 2>&1 &
-PID_MM=$!
-echo "   PID: $PID_MM | Log: $LOG_MM"
+if [ -f "$CONFIG_MM" ]; then
+    echo "🚀 Starting Market Making Bot..."
+    ./bin/bot --config $CONFIG_MM > $LOG_MM 2>&1 &
+    PID_MM=$!
+    echo "   PID: $PID_MM | Log: $LOG_MM | Config: $CONFIG_MM"
+else
+    echo "⚠️  Skipping MM Bot (config not found: $CONFIG_MM)"
+fi
 
-echo "🚀 Starting Funding Arbitrage Bot..."
-./bin/bot -c $CONFIG_FUNDING > $LOG_FUNDING 2>&1 &
-PID_FUNDING=$!
-echo "   PID: $PID_FUNDING | Log: $LOG_FUNDING"
+if [ -f "$CONFIG_FUNDING" ]; then
+    echo "🚀 Starting Funding Arbitrage Bot..."
+    ./bin/bot --config $CONFIG_FUNDING > $LOG_FUNDING 2>&1 &
+    PID_FUNDING=$!
+    echo "   PID: $PID_FUNDING | Log: $LOG_FUNDING | Config: $CONFIG_FUNDING"
+else
+    echo "⚠️  Skipping Funding Bot (config not found: $CONFIG_FUNDING)"
+fi
 
 echo "=== All systems operational ==="
 echo "Press Ctrl+C to stop all services."

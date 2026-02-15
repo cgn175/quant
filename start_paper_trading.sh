@@ -35,29 +35,49 @@ echo ""
 # Create data directory if needed
 mkdir -p data
 
-# Check if sentiment server is running
-SENTIMENT_URL=$(grep "url:" config.trend.yaml | grep -v "#" | head -1 | awk '{print $2}')
-SENTIMENT_HOST=$(echo $SENTIMENT_URL | sed 's|http://||' | sed 's/:.*//')
-SENTIMENT_PORT=$(echo $SENTIMENT_URL | sed 's/.*://')
-
-echo "Checking sentiment server at $SENTIMENT_URL..."
-if ! curl -s "$SENTIMENT_URL" > /dev/null 2>&1; then
-    echo "WARNING: Sentiment server not running at $SENTIMENT_URL"
-    echo "Sentiment features will default to 0.0"
-    echo ""
-    echo "To start sentiment server:"
-    echo "  cd sentiment && python3 main.py"
-    echo ""
-    read -p "Continue without sentiment server? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
+# Check if ML server is running (required for regime filter and dynamic stop)
+ML_URL=$(grep "url:" config.trend.yaml | grep -v "#" | head -1 | awk '{print $2}')
+if [ -n "$ML_URL" ]; then
+    echo "Checking ML server at $ML_URL..."
+    if ! curl -s "$ML_URL/health" > /dev/null 2>&1; then
+        echo "WARNING: ML server not running at $ML_URL"
+        echo "Regime filter and dynamic stop will fall back to ADX"
+        echo ""
+        echo "To start ML server:"
+        echo "  python3 ml/server.py --models-dir ml/models"
+        echo ""
+        read -p "Continue without ML server? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        echo "✓ ML server is running"
     fi
-else
-    echo "✓ Sentiment server is running"
+    echo ""
 fi
 
-echo ""
+# Check if sentiment server is running
+SENTIMENT_URL=$(grep "sentiment:" -A 5 config.trend.yaml | grep "url:" | head -1 | awk '{print $2}')
+if [ -n "$SENTIMENT_URL" ]; then
+    echo "Checking sentiment server at $SENTIMENT_URL..."
+    if ! curl -s "$SENTIMENT_URL" > /dev/null 2>&1; then
+        echo "WARNING: Sentiment server not running at $SENTIMENT_URL"
+        echo "Sentiment features will default to 0.0"
+        echo ""
+        echo "To start sentiment server:"
+        echo "  cd sentiment && python3 main.py"
+        echo ""
+        read -p "Continue without sentiment server? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        echo "✓ Sentiment server is running"
+    fi
+    echo ""
+fi
 
 # Start the bot
 echo "Starting bot..."

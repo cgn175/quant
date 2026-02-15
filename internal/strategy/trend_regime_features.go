@@ -69,6 +69,8 @@ func BuildRegimeFeatures(
 	}
 
 	// --- sentiment features ---
+	// NOTE: Limited training data (4 days) - sentiment has low weight in models
+	// Will improve as more data accumulates (target: 3+ months by April 2026)
 	if sent != nil {
 		m["sentiment_1h"] = sent.Score1h
 		m["sentiment_24h"] = sent.Score24h
