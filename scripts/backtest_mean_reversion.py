@@ -22,6 +22,21 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+# Symbols to backtest - easily extensible
+DEFAULT_SYMBOLS = {
+    "BTC/USDT": "BTC_USDT_4h_2190d.parquet",
+    "ETH/USDT": "ETH_USDT_4h_2190d.parquet",
+    "SOL/USDT": "SOL_USDT_4h_2190d.parquet",
+    "BNB/USDT": "BNB_USDT_4h_2190d.parquet",
+    "NEAR/USDT": "NEAR_USDT_4h_2190d.parquet",
+    "EGLD/USDT": "EGLD_USDT_4h_2190d.parquet",
+    "XRP/USDT": "XRP_USDT_4h_2190d.parquet",
+}
+
+# ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
 
@@ -686,25 +701,34 @@ class MeanReversionBacktester:
 # ---------------------------------------------------------------------------
 
 
-def load_all_data(data_dir: Path = None) -> dict[str, pd.DataFrame]:
-    """Load all 4 symbols' OHLCV data."""
+def load_all_data(
+    data_dir: Path = None, symbols: dict[str, str] = None
+) -> dict[str, pd.DataFrame]:
+    """Load OHLCV data for specified symbols.
+
+    Args:
+        data_dir: Path to data directory. Defaults to ../data_4h relative to script.
+        symbols: Dictionary mapping symbol names to parquet filenames.
+                Defaults to DEFAULT_SYMBOLS.
+
+    Returns:
+        Dictionary mapping symbol names to DataFrames.
+    """
     if data_dir is None:
         data_dir = Path(__file__).resolve().parent.parent / "data_4h"
 
-    symbols_files = {
-        "BTC/USDT": "BTC_USDT_4h_2190d.parquet",
-        "ETH/USDT": "ETH_USDT_4h_2190d.parquet",
-        "SOL/USDT": "SOL_USDT_4h_2190d.parquet",
-        "BNB/USDT": "BNB_USDT_4h_2190d.parquet",
-    }
+    if symbols is None:
+        symbols = DEFAULT_SYMBOLS
 
     ohlcv_dict = {}
 
-    for sym, fname in symbols_files.items():
+    for sym, fname in symbols.items():
         fpath = data_dir / fname
         if fpath.exists():
             ohlcv_dict[sym] = pd.read_parquet(fpath)
             print(f"  Loaded {sym}: {len(ohlcv_dict[sym]):,} bars")
+        else:
+            print(f"  Skipping {sym}: {fname} not found")
 
     return ohlcv_dict
 
