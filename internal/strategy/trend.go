@@ -615,6 +615,14 @@ func (ts *TrendStrategy) OnBar(
 		var sent *sentiment.SentimentData
 		if ts.sentimentClient != nil {
 			sent = ts.sentimentClient.Get(symbol)
+			// Update sentiment metrics
+			if ts.prom != nil && sent != nil {
+				ts.prom.SentimentScore.WithLabelValues(symbol).Set(sent.Score1h)
+				ts.prom.Sentiment1h.WithLabelValues(symbol).Set(sent.Score1h)
+				ts.prom.Sentiment24h.WithLabelValues(symbol).Set(sent.Score24h)
+				ts.prom.SentimentVelocity.WithLabelValues(symbol).Set(sent.Velocity)
+				ts.prom.MentionsZScore.WithLabelValues(symbol).Set(sent.MentionsZScore)
+			}
 		}
 
 		// Pick v1 or v2 features based on per-symbol config
@@ -692,6 +700,14 @@ func (ts *TrendStrategy) OnBar(
 		var sent *sentiment.SentimentData
 		if ts.sentimentClient != nil {
 			sent = ts.sentimentClient.Get(symbol)
+			// Update sentiment metrics
+			if ts.prom != nil && sent != nil {
+				ts.prom.SentimentScore.WithLabelValues(symbol).Set(sent.Score1h)
+				ts.prom.Sentiment1h.WithLabelValues(symbol).Set(sent.Score1h)
+				ts.prom.Sentiment24h.WithLabelValues(symbol).Set(sent.Score24h)
+				ts.prom.SentimentVelocity.WithLabelValues(symbol).Set(sent.Velocity)
+				ts.prom.MentionsZScore.WithLabelValues(symbol).Set(sent.MentionsZScore)
+			}
 		}
 		mlFeatures := BuildMLFeatures(candles, fundingCache, symbol, idx, cfg, sent)
 		mlStart := time.Now()

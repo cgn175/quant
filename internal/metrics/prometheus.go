@@ -8,32 +8,36 @@ import (
 // Metrics holds all prometheus metrics
 type Metrics struct {
 	// Equity metrics
-	Equity               prometheus.Gauge
-	RealizedPnL          prometheus.Gauge
-	UnrealizedPnL        prometheus.Gauge
-	DailyPnL             prometheus.Gauge
-	MaxDrawdown          prometheus.Gauge
+	Equity        prometheus.Gauge
+	RealizedPnL   prometheus.Gauge
+	UnrealizedPnL prometheus.Gauge
+	DailyPnL      prometheus.Gauge
+	MaxDrawdown   prometheus.Gauge
 
 	// Position metrics
-	OpenPositions        prometheus.Gauge
-	MaxOpenPositions     prometheus.Gauge
-	
+	OpenPositions    prometheus.Gauge
+	MaxOpenPositions prometheus.Gauge
+
 	// Trade metrics
-	TotalTrades          prometheus.Counter
-	WinningTrades        prometheus.Counter
-	LosingTrades         prometheus.Counter
-	WinRate              prometheus.Gauge
-	ProfitFactor         prometheus.Gauge
+	TotalTrades   prometheus.Counter
+	WinningTrades prometheus.Counter
+	LosingTrades  prometheus.Counter
+	WinRate       prometheus.Gauge
+	ProfitFactor  prometheus.Gauge
 
 	// Per-symbol metrics
-	PositionSize         prometheus.GaugeVec
+	PositionSize           prometheus.GaugeVec
 	UnrealizedPnLPerSymbol prometheus.GaugeVec
-	SentimentScore       prometheus.GaugeVec
+	SentimentScore         prometheus.GaugeVec
+	Sentiment1h            prometheus.GaugeVec
+	Sentiment24h           prometheus.GaugeVec
+	SentimentVelocity      prometheus.GaugeVec
+	MentionsZScore         prometheus.GaugeVec
 
 	// Data ingestion metrics
-	CandlesReceived      prometheus.CounterVec // per symbol
-	CandlesClosed        prometheus.CounterVec // per symbol (only closed candles)
-	WebSocketReconnects  prometheus.Counter
+	CandlesReceived     prometheus.CounterVec // per symbol
+	CandlesClosed       prometheus.CounterVec // per symbol (only closed candles)
+	WebSocketReconnects prometheus.Counter
 
 	// System metrics
 	ModelInferenceTime   prometheus.Histogram
@@ -118,7 +122,23 @@ func NewMetrics() *Metrics {
 		}, []string{"symbol"}),
 		SentimentScore: *promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "sentiment_score",
-			Help: "Current sentiment score by symbol",
+			Help: "Current sentiment score by symbol (legacy - use sentiment_1h)",
+		}, []string{"symbol"}),
+		Sentiment1h: *promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "sentiment_1h",
+			Help: "1-hour sentiment score by symbol (-1 to +1)",
+		}, []string{"symbol"}),
+		Sentiment24h: *promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "sentiment_24h",
+			Help: "24-hour sentiment score by symbol (-1 to +1)",
+		}, []string{"symbol"}),
+		SentimentVelocity: *promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "sentiment_velocity",
+			Help: "Sentiment velocity (rate of change) by symbol",
+		}, []string{"symbol"}),
+		MentionsZScore: *promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "mentions_zscore",
+			Help: "Mentions z-score (anomaly detection) by symbol",
 		}, []string{"symbol"}),
 
 		// Data ingestion metrics
@@ -137,23 +157,23 @@ func NewMetrics() *Metrics {
 
 		// System metrics
 		ModelInferenceTime: promauto.NewHistogram(prometheus.HistogramOpts{
-			Name: "model_inference_duration_seconds",
-			Help: "Model inference latency",
+			Name:    "model_inference_duration_seconds",
+			Help:    "Model inference latency",
 			Buckets: []float64{.001, .01, .05, .1, .5, 1},
 		}),
 		OrderExecutionTime: promauto.NewHistogram(prometheus.HistogramOpts{
-			Name: "order_execution_duration_seconds",
-			Help: "Order execution latency",
+			Name:    "order_execution_duration_seconds",
+			Help:    "Order execution latency",
 			Buckets: []float64{.01, .05, .1, .5, 1, 5},
 		}),
 		SentimentAPILatency: promauto.NewHistogram(prometheus.HistogramOpts{
-			Name: "sentiment_api_duration_seconds",
-			Help: "Sentiment API latency",
+			Name:    "sentiment_api_duration_seconds",
+			Help:    "Sentiment API latency",
 			Buckets: []float64{.1, .5, 1, 5, 10},
 		}),
 		SignalGenerationTime: promauto.NewHistogram(prometheus.HistogramOpts{
-			Name: "signal_generation_duration_seconds",
-			Help: "Signal generation latency",
+			Name:    "signal_generation_duration_seconds",
+			Help:    "Signal generation latency",
 			Buckets: []float64{.001, .01, .05, .1},
 		}),
 
@@ -175,8 +195,8 @@ func NewMetrics() *Metrics {
 			Help: "Entries blocked by ADX filter per symbol",
 		}, []string{"symbol"}),
 		MLFilterLatency: promauto.NewHistogram(prometheus.HistogramOpts{
-			Name: "ml_filter_latency_seconds",
-			Help: "ML service call latency",
+			Name:    "ml_filter_latency_seconds",
+			Help:    "ML service call latency",
 			Buckets: []float64{.005, .01, .025, .05, .1, .2, .5},
 		}),
 		MLFilterFallbackTotal: promauto.NewCounter(prometheus.CounterOpts{
