@@ -97,6 +97,10 @@ type TrendConfig struct {
 	DrawdownHaltHours  int     // 48 — hours to halt after drawdown breach
 	MaxLossPerPosition float64 // 0.05 — hard stop at 5% of equity per position
 	ExtremeVolATRRatio float64 // 3.0 — halt entries when BTC ATR(14)/ATR(50) > this
+
+	// Time-based exit for dead positions
+	TimeStopBars int     // 10 — exit if position hasn't moved 0.5R after N bars
+	TimeStopMinR float64 // 0.5 — minimum R required to avoid time stop
 }
 
 // SectorMap classifies trading symbols by sector for correlation management (Patch 3).
@@ -157,6 +161,8 @@ func DefaultTrendConfig() TrendConfig {
 		DrawdownHaltHours:     48,
 		MaxLossPerPosition:    0.05,
 		ExtremeVolATRRatio:    3.0,
+		TimeStopBars:          10,
+		TimeStopMinR:          0.5,
 	}
 }
 
@@ -918,11 +924,11 @@ func (ts *TrendStrategy) UpdateTrailingStop(
 		pos.BarsSinceEntry++
 	}
 
-	// Time-based exit: close dead positions after 10 bars with minimal profit
-	// A position is "dead" if it hasn't reached at least 0.5R after 10 bars
-	if pos.BarsSinceEntry >= 10 {
+	// Time-based exit: close dead positions after N bars with minimal profit
+	// A position is "dead" if it hasn't reached at least TimeStopMinR after TimeStopBars bars
+	if pos.BarsSinceEntry >= ts.config.TimeStopBars {
 		currentR := pos.CurrentR(last.Close)
-		if currentR < 0.5 {
+		if currentR < ts.config.TimeStopMinR {
 			log.Debug().
 				Str("symbol", symbol).
 				Int("bars_since_entry", pos.BarsSinceEntry).

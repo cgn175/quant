@@ -21,10 +21,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Position:
@@ -67,23 +67,26 @@ class BacktestResult:
 # Technical Indicators
 # ---------------------------------------------------------------------------
 
+
 def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     """Calculate RSI(period)."""
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0)
     loss = (-delta).where(delta < 0, 0.0)
-    
+
     avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean()
-    
+
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi_val = 100 - (100 / (1 + rs))
     return rsi_val
 
 
-def bollinger_bands(df: pd.DataFrame, period: int = 20, std_dev: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:
+def bollinger_bands(
+    df: pd.DataFrame, period: int = 20, std_dev: float = 2.0
+) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Calculate Bollinger Bands.
-    
+
     Returns: (upper_band, middle_band, lower_band)
     """
     middle = df["close"].rolling(window=period).mean()
@@ -103,38 +106,47 @@ def _true_range(df: pd.DataFrame) -> pd.Series:
 
 def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Calculate ADX(period).
-    
+
     Returns: ADX series (0-100)
     """
     high = df["high"]
     low = df["low"]
     close = df["close"]
-    
+
     # Directional movement
     plus_dm = high.diff()
     minus_dm = -low.diff()
-    
+
     plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
     minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
-    
+
     tr = _true_range(df)
-    
+
     # Wilder smoothing (alpha = 1/period)
     alpha = 1.0 / period
     atr_smooth = tr.ewm(alpha=alpha, adjust=False).mean()
-    plus_di = 100 * plus_dm.ewm(alpha=alpha, adjust=False).mean() / atr_smooth.replace(0, np.nan)
-    minus_di = 100 * minus_dm.ewm(alpha=alpha, adjust=False).mean() / atr_smooth.replace(0, np.nan)
-    
+    plus_di = (
+        100
+        * plus_dm.ewm(alpha=alpha, adjust=False).mean()
+        / atr_smooth.replace(0, np.nan)
+    )
+    minus_di = (
+        100
+        * minus_dm.ewm(alpha=alpha, adjust=False).mean()
+        / atr_smooth.replace(0, np.nan)
+    )
+
     # DX and ADX
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     adx_val = dx.ewm(alpha=alpha, adjust=False).mean()
-    
+
     return adx_val
 
 
 # ---------------------------------------------------------------------------
 # Signal Generation
 # ---------------------------------------------------------------------------
+
 
 def generate_mean_reversion_signals(
     df: pd.DataFrame,
@@ -148,13 +160,13 @@ def generate_mean_reversion_signals(
     use_reversal_confirmation: bool = True,  # Wait for reversal candle
 ) -> pd.DataFrame:
     """Generate mean reversion signals for ranging markets.
-    
+
     Entry conditions:
     - LONG: RSI < oversold (for prev bar) AND current bar is bullish (close > open)
             AND price was near or below BB lower AND ADX < threshold
     - SHORT: RSI > overbought (for prev bar) AND current bar is bearish (close < open)
              AND price was near or above BB upper AND ADX < threshold
-    
+
     Returns DataFrame with:
         - signal: 1 (long), -1 (short), 0 (none)
         - rsi: RSI value
@@ -166,53 +178,50 @@ def generate_mean_reversion_signals(
     rsi_val = rsi(df["close"], rsi_period)
     bb_upper, bb_middle, bb_lower = bollinger_bands(df, bb_period, bb_std)
     adx_val = adx(df, adx_period)
-    
+
     # Candle direction
     bullish_candle = df["close"] > df["open"]
     bearish_candle = df["close"] < df["open"]
-    
+
     # Price proximity to BB (within 0.5% of band)
     near_lower = df["low"] <= bb_lower * 1.005  # Within 0.5% of lower band
     near_upper = df["high"] >= bb_upper * 0.995  # Within 0.5% of upper band
-    
+
     if use_reversal_confirmation:
         # Wait for reversal confirmation - RSI extreme on previous bar, reversal on current
         prev_rsi_oversold = rsi_val.shift(1) < rsi_oversold
         prev_rsi_overbought = rsi_val.shift(1) > rsi_overbought
-        
+
         # Long: Previous RSI oversold + current bullish candle + near BB lower + ADX low
         long_condition = (
-            prev_rsi_oversold & 
-            bullish_candle & 
-            near_lower & 
-            (adx_val < adx_threshold)
+            prev_rsi_oversold & bullish_candle & near_lower & (adx_val < adx_threshold)
         )
-        
+
         # Short: Previous RSI overbought + current bearish candle + near BB upper + ADX low
         short_condition = (
-            prev_rsi_overbought & 
-            bearish_candle & 
-            near_upper & 
-            (adx_val < adx_threshold)
+            prev_rsi_overbought
+            & bearish_candle
+            & near_upper
+            & (adx_val < adx_threshold)
         )
     else:
         # Original: immediate entry on RSI extreme
         long_condition = (
-            (rsi_val < rsi_oversold) & 
-            (df["low"] <= bb_lower) & 
-            (adx_val < adx_threshold)
+            (rsi_val < rsi_oversold)
+            & (df["low"] <= bb_lower)
+            & (adx_val < adx_threshold)
         )
-        
+
         short_condition = (
-            (rsi_val > rsi_overbought) & 
-            (df["high"] >= bb_upper) & 
-            (adx_val < adx_threshold)
+            (rsi_val > rsi_overbought)
+            & (df["high"] >= bb_upper)
+            & (adx_val < adx_threshold)
         )
-    
+
     signal = pd.Series(0, index=df.index, dtype=int)
     signal[long_condition] = 1
     signal[short_condition] = -1
-    
+
     # Build output
     result = pd.DataFrame(index=df.index)
     result["signal"] = signal
@@ -221,7 +230,7 @@ def generate_mean_reversion_signals(
     result["bb_upper"] = bb_upper
     result["bb_middle"] = bb_middle
     result["bb_lower"] = bb_lower
-    
+
     return result
 
 
@@ -229,9 +238,10 @@ def generate_mean_reversion_signals(
 # Backtester
 # ---------------------------------------------------------------------------
 
+
 class MeanReversionBacktester:
     """Event-driven mean reversion backtester."""
-    
+
     def __init__(
         self,
         initial_equity: float = 10_000,
@@ -249,7 +259,7 @@ class MeanReversionBacktester:
         self.max_positions = max_positions
         self.max_daily_loss = max_daily_loss
         self.stop_mult = stop_mult
-        
+
         # State
         self.equity = initial_equity
         self.positions: dict[str, Position] = {}  # symbol -> Position
@@ -259,7 +269,7 @@ class MeanReversionBacktester:
         self.current_day = None
         self.halted = False
         self._next_position_id = 1
-    
+
     def reset(self):
         self.equity = self.initial_equity
         self.positions = {}
@@ -269,17 +279,17 @@ class MeanReversionBacktester:
         self.current_day = None
         self.halted = False
         self._next_position_id = 1
-    
+
     def _apply_slippage(self, price: float, direction: int, is_exit: bool) -> float:
         """Apply slippage. For entries: adverse; for exits: adverse."""
         slip = price * self.slippage_bps / 10_000
         if is_exit:
             direction = -direction  # exit is opposite
         return price + direction * slip  # buy higher, sell lower
-    
+
     def _calc_fees(self, notional: float) -> float:
         return notional * self.fee_rate
-    
+
     def _check_daily_reset(self, timestamp: pd.Timestamp):
         """Reset daily PnL tracker and halt flag at day boundary."""
         day = timestamp.date()
@@ -287,7 +297,7 @@ class MeanReversionBacktester:
             self.current_day = day
             self.daily_pnl = 0.0
             self.halted = False
-    
+
     def _is_halted(self) -> bool:
         """Check daily loss cap."""
         if self.halted:
@@ -296,37 +306,35 @@ class MeanReversionBacktester:
             self.halted = True
             return True
         return False
-    
+
     def _close_position(
-        self, 
-        symbol: str, 
-        exit_price: float,
-        exit_time: pd.Timestamp, 
-        reason: str
+        self, symbol: str, exit_price: float, exit_time: pd.Timestamp, reason: str
     ):
         """Close a position."""
         if symbol not in self.positions:
             return
-            
+
         pos = self.positions[symbol]
-        
+
         # Apply slippage to exit
         fill_price = self._apply_slippage(exit_price, pos.direction, is_exit=True)
-        
+
         # PnL calculation
         raw_pnl = pos.direction * (fill_price - pos.entry_price) * pos.size
         entry_fees = self._calc_fees(pos.entry_price * pos.size)
         exit_fees = self._calc_fees(fill_price * pos.size)
         total_fees = entry_fees + exit_fees
         net_pnl = raw_pnl - total_fees
-        
+
         # R-multiple (based on 1R stop distance)
         r_mult = 0.0
         if pos.initial_risk_r > 0:
-            r_mult = (pos.direction * (fill_price - pos.entry_price)) / pos.initial_risk_r
-        
+            r_mult = (
+                pos.direction * (fill_price - pos.entry_price)
+            ) / pos.initial_risk_r
+
         pnl_pct = net_pnl / self.equity if self.equity > 0 else 0.0
-        
+
         trade = Trade(
             symbol=symbol,
             direction=pos.direction,
@@ -343,23 +351,29 @@ class MeanReversionBacktester:
             position_id=pos.position_id,
         )
         self.trades.append(trade)
-        
+
         # Update equity
         self.equity += net_pnl
         self.daily_pnl += net_pnl
         self.equity_curve.append((exit_time, self.equity))
-        
+
         # Remove position
         del self.positions[symbol]
-    
-    def _check_exits(self, symbol: str, bar: pd.Series, signals: pd.DataFrame, timestamp: pd.Timestamp):
+
+    def _check_exits(
+        self,
+        symbol: str,
+        bar: pd.Series,
+        signals: pd.DataFrame,
+        timestamp: pd.Timestamp,
+    ):
         """Check if position should exit on BB middle band touch or 1R stop."""
         if symbol not in self.positions:
             return
-            
+
         pos = self.positions[symbol]
         bb_middle = signals.loc[timestamp, "bb_middle"]
-        
+
         if pos.direction == 1:  # Long position
             # Exit on BB middle band touch (high >= middle) OR 1R stop hit (low <= stop)
             if bar["high"] >= bb_middle:
@@ -372,10 +386,10 @@ class MeanReversionBacktester:
                 self._close_position(symbol, bb_middle, timestamp, "target")
             elif bar["high"] >= pos.stop_price:
                 self._close_position(symbol, pos.stop_price, timestamp, "stop")
-    
+
     def _enter_position(
-        self, 
-        symbol: str, 
+        self,
+        symbol: str,
         direction: int,
         entry_price: float,
         entry_time: pd.Timestamp,
@@ -386,30 +400,30 @@ class MeanReversionBacktester:
         # Calculate position size based on 1R risk
         risk_amount = self.equity * self.risk_per_trade
         stop_dist = abs(entry_price - stop_price)
-        
+
         if stop_dist <= 0:
             return
-        
+
         # Size = risk_amount / stop_distance (in base units)
         size = risk_amount / stop_dist
-        
+
         # Cap by available equity (assume max 1x leverage for mean reversion)
         max_notional = self.equity
         max_size = max_notional / entry_price
         size = min(size, max_size)
-        
+
         if size <= 0:
             return
-        
+
         # Apply entry slippage
         fill_price = self._apply_slippage(entry_price, direction, is_exit=False)
-        
+
         # Recalculate stop based on actual fill
         if direction == 1:  # long
             adjusted_stop = fill_price - stop_dist
         else:  # short
             adjusted_stop = fill_price + stop_dist
-        
+
         pos = Position(
             symbol=symbol,
             direction=direction,
@@ -423,7 +437,7 @@ class MeanReversionBacktester:
         )
         self._next_position_id += 1
         self.positions[symbol] = pos
-    
+
     def run(
         self,
         signals_dict: dict[str, pd.DataFrame],
@@ -431,31 +445,31 @@ class MeanReversionBacktester:
     ) -> BacktestResult:
         """Run backtest across all symbols."""
         self.reset()
-        
+
         # Get all unique timestamps across all symbols, sorted
         all_timestamps = set()
         for sym in signals_dict:
             all_timestamps.update(signals_dict[sym].index)
         all_timestamps = sorted(all_timestamps)
-        
+
         symbols = sorted(signals_dict.keys())
-        
+
         for ts in all_timestamps:
             self._check_daily_reset(ts)
-            
+
             for sym in symbols:
                 sig_df = signals_dict[sym]
                 ohlcv_df = ohlcv_dict[sym]
-                
+
                 if ts not in sig_df.index:
                     continue
-                
+
                 bar = ohlcv_df.loc[ts]
                 sig_row = sig_df.loc[ts]
-                
+
                 # 1. Check exits for existing positions
                 self._check_exits(sym, bar, sig_df, ts)
-                
+
                 # 2. Check for new entries (only if no position in this symbol)
                 if self._is_halted():
                     continue
@@ -463,20 +477,20 @@ class MeanReversionBacktester:
                     continue
                 if len(self.positions) >= self.max_positions:
                     continue
-                
+
                 signal = int(sig_row["signal"])
                 if signal == 0:
                     continue
-                
+
                 # Entry price: use close for simplicity
                 entry_price = bar["close"]
-                
+
                 # Calculate stop distance - use a fraction of distance to BB middle
                 # This is tighter than going beyond the BB band
                 bb_middle = sig_row["bb_middle"]
                 bb_lower = sig_row["bb_lower"]
                 bb_upper = sig_row["bb_upper"]
-                
+
                 if signal == 1:  # long
                     # Stop at some fraction toward the middle from entry
                     # Distance from entry to middle
@@ -492,7 +506,7 @@ class MeanReversionBacktester:
                         continue  # Already past middle, skip
                     stop_price = entry_price + self.stop_mult * dist_to_middle
                     target_price = bb_middle
-                
+
                 self._enter_position(
                     symbol=sym,
                     direction=signal,
@@ -501,64 +515,66 @@ class MeanReversionBacktester:
                     stop_price=stop_price,
                     target_price=target_price,
                 )
-        
+
         # Close any remaining positions at last bar close
         for sym in list(self.positions.keys()):
             if sym in ohlcv_dict and len(ohlcv_dict[sym]) > 0:
                 last_bar = ohlcv_dict[sym].iloc[-1]
                 last_ts = ohlcv_dict[sym].index[-1]
                 self._close_position(sym, last_bar["close"], last_ts, "end_of_data")
-        
+
         metrics = self._compute_metrics()
         return BacktestResult(
             equity_curve=self.equity_curve,
             trades=self.trades,
             metrics=metrics,
         )
-    
+
     def _compute_metrics(self) -> dict:
         """Compute performance metrics."""
         trades = self.trades
         if not trades:
             return {"total_return": 0, "num_trades": 0, "error": "no trades"}
-        
+
         # Equity curve to series
         eq_df = pd.DataFrame(self.equity_curve, columns=["timestamp", "equity"])
         eq_df = eq_df.dropna(subset=["timestamp"])
         if len(eq_df) < 2:
             eq_df = pd.DataFrame(
-                [(trades[0].entry_time, self.initial_equity),
-                 (trades[-1].exit_time, self.equity)],
+                [
+                    (trades[0].entry_time, self.initial_equity),
+                    (trades[-1].exit_time, self.equity),
+                ],
                 columns=["timestamp", "equity"],
             )
-        
+
         total_return = (self.equity - self.initial_equity) / self.initial_equity
-        
+
         # Daily returns for Sharpe/Sortino
         eq_df = eq_df.set_index("timestamp").sort_index()
         eq_df = eq_df[~eq_df.index.duplicated(keep="last")]
         daily_eq = eq_df.resample("1D").last().dropna()
         daily_returns = daily_eq["equity"].pct_change().dropna()
-        
+
         # Annualized Sharpe (crypto trades 365 days/year)
         if len(daily_returns) > 1 and daily_returns.std() > 0:
             sharpe = daily_returns.mean() / daily_returns.std() * np.sqrt(365)
         else:
             sharpe = 0.0
-        
+
         # Sortino
         downside = daily_returns[daily_returns < 0]
         if len(downside) > 0 and downside.std() > 0:
             sortino = daily_returns.mean() / downside.std() * np.sqrt(365)
         else:
             sortino = 0.0
-        
+
         # Max drawdown
         eq_series = eq_df["equity"]
         running_max = eq_series.cummax()
         drawdown = (eq_series - running_max) / running_max
         max_dd = abs(drawdown.min()) if len(drawdown) > 0 else 0.0
-        
+
         # CAGR
         if len(eq_df) > 1:
             days = (eq_df.index[-1] - eq_df.index[0]).days
@@ -568,30 +584,34 @@ class MeanReversionBacktester:
                 cagr = 0.0
         else:
             cagr = 0.0
-        
+
         # Calmar
         calmar = cagr / max_dd if max_dd > 0 else 0.0
-        
+
         # Trade stats
         pnls = [t.pnl for t in trades]
         winners = [p for p in pnls if p > 0]
         losers = [p for p in pnls if p <= 0]
-        
+
         win_rate = len(winners) / len(pnls) if pnls else 0.0
-        
+
         avg_winner = np.mean(winners) if winners else 0.0
         avg_loser = abs(np.mean(losers)) if losers else 0.0
         avg_wl_ratio = avg_winner / avg_loser if avg_loser > 0 else float("inf")
-        
-        profit_factor = sum(winners) / abs(sum(losers)) if losers and sum(losers) != 0 else float("inf")
-        
+
+        profit_factor = (
+            sum(winners) / abs(sum(losers))
+            if losers and sum(losers) != 0
+            else float("inf")
+        )
+
         expectancy = np.mean(pnls) if pnls else 0.0
         expectancy_pct = expectancy / self.initial_equity * 100
-        
+
         # R-multiples
         r_mults = [t.r_multiple for t in trades]
         avg_r = np.mean(r_mults) if r_mults else 0.0
-        
+
         # Consecutive losses
         max_consec_loss = 0
         curr_consec = 0
@@ -601,7 +621,7 @@ class MeanReversionBacktester:
                 max_consec_loss = max(max_consec_loss, curr_consec)
             else:
                 curr_consec = 0
-        
+
         # Trades per month
         if len(eq_df) > 1:
             days = (eq_df.index[-1] - eq_df.index[0]).days
@@ -609,28 +629,30 @@ class MeanReversionBacktester:
             trades_per_month = len(trades) / months
         else:
             trades_per_month = 0.0
-        
+
         # Profitable months
-        trade_df = pd.DataFrame([{
-            "exit_time": t.exit_time, "pnl": t.pnl
-        } for t in trades])
+        trade_df = pd.DataFrame(
+            [{"exit_time": t.exit_time, "pnl": t.pnl} for t in trades]
+        )
         if len(trade_df) > 0:
             trade_df = trade_df.set_index("exit_time")
             monthly = trade_df.resample("ME")["pnl"].sum()
             profitable_months = (monthly > 0).sum()
             total_months = len(monthly)
-            profitable_months_pct = profitable_months / total_months if total_months > 0 else 0.0
+            profitable_months_pct = (
+                profitable_months / total_months if total_months > 0 else 0.0
+            )
         else:
             profitable_months_pct = 0.0
-        
+
         total_fees = sum(t.fees for t in trades)
-        
+
         # Exit reason breakdown
         exits_by_reason = {}
         for t in trades:
             reason = t.exit_reason
             exits_by_reason[reason] = exits_by_reason.get(reason, 0) + 1
-        
+
         return {
             "total_return": total_return,
             "total_return_pct": total_return * 100,
@@ -663,26 +685,27 @@ class MeanReversionBacktester:
 # Data Loading Helpers
 # ---------------------------------------------------------------------------
 
+
 def load_all_data(data_dir: Path = None) -> dict[str, pd.DataFrame]:
     """Load all 4 symbols' OHLCV data."""
     if data_dir is None:
         data_dir = Path(__file__).resolve().parent.parent / "data_4h"
-    
+
     symbols_files = {
         "BTC/USDT": "BTC_USDT_4h_2190d.parquet",
         "ETH/USDT": "ETH_USDT_4h_2190d.parquet",
         "SOL/USDT": "SOL_USDT_4h_2190d.parquet",
         "BNB/USDT": "BNB_USDT_4h_2190d.parquet",
     }
-    
+
     ohlcv_dict = {}
-    
+
     for sym, fname in symbols_files.items():
         fpath = data_dir / fname
         if fpath.exists():
             ohlcv_dict[sym] = pd.read_parquet(fpath)
             print(f"  Loaded {sym}: {len(ohlcv_dict[sym]):,} bars")
-    
+
     return ohlcv_dict
 
 
@@ -702,7 +725,9 @@ def print_metrics(metrics: dict):
     print()
     print(f"  Win rate:           {metrics['win_rate_pct']:.1f}%")
     print(f"  Profit factor:      {metrics['profit_factor']:.2f}")
-    print(f"  Expectancy/trade:   ${metrics['expectancy']:.2f} ({metrics['expectancy_pct']:.3f}%)")
+    print(
+        f"  Expectancy/trade:   ${metrics['expectancy']:.2f} ({metrics['expectancy_pct']:.3f}%)"
+    )
     print(f"  Avg winner:         ${metrics['avg_winner']:.2f}")
     print(f"  Avg loser:          ${metrics['avg_loser']:.2f}")
     print(f"  Winner/loser ratio: {metrics['avg_winner_loser_ratio']:.2f}")
@@ -713,7 +738,7 @@ def print_metrics(metrics: dict):
     print(f"  Max consec losses:  {metrics['max_consecutive_losses']}")
     print(f"  Profitable months:  {metrics['profitable_months_pct']:.1f}%")
     print(f"  Total fees:         ${metrics['total_fees']:.2f}")
-    
+
     # Exit reason breakdown
     if "exit_reasons" in metrics and metrics["exit_reasons"]:
         print()
@@ -721,13 +746,14 @@ def print_metrics(metrics: dict):
         for reason, count in sorted(metrics["exit_reasons"].items()):
             pct = count / metrics["num_trades"] * 100
             print(f"    {reason}: {count} ({pct:.1f}%)")
-    
+
     print("=" * 60)
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def main():
     print("Mean Reversion Strategy Backtest")
@@ -736,15 +762,15 @@ def main():
     print("Entry: RSI < 30 (prev bar) + bullish candle + near BB band + ADX < 20")
     print("Exit: BB middle band touch OR stop (1x dist to middle)")
     print("=" * 60)
-    
+
     # Load data
     print("\nLoading data...")
     ohlcv_dict = load_all_data()
-    
+
     if not ohlcv_dict:
         print("ERROR: No OHLCV data found in data_4h/")
         sys.exit(1)
-    
+
     # Generate signals for each symbol
     print("\nGenerating signals...")
     signals_dict = {}
@@ -760,7 +786,7 @@ def main():
         longs = (signals["signal"] == 1).sum()
         shorts = (signals["signal"] == -1).sum()
         print(f"  {sym}: {n_signals} signals ({longs} L / {shorts} S)")
-    
+
     # Run backtest
     print("\nRunning backtest...")
     bt = MeanReversionBacktester(
@@ -773,43 +799,45 @@ def main():
         stop_mult=1.0,  # Stop distance = 1x distance to middle (tighter stop)
     )
     result = bt.run(signals_dict, ohlcv_dict)
-    
+
     # Print results
     print_metrics(result.metrics)
-    
+
     # Save results
     results_dir = Path(__file__).resolve().parent.parent / "results"
     results_dir.mkdir(exist_ok=True)
-    
+
     # Equity curve
     eq_df = pd.DataFrame(result.equity_curve, columns=["timestamp", "equity"])
     eq_df = eq_df.dropna(subset=["timestamp"])
     eq_path = results_dir / "mean_reversion_equity.csv"
     eq_df.to_csv(eq_path, index=False)
     print(f"\nEquity curve saved to {eq_path}")
-    
+
     # Trade log
     trades_data = []
     for t in result.trades:
-        trades_data.append({
-            "symbol": t.symbol,
-            "direction": "LONG" if t.direction == 1 else "SHORT",
-            "entry_time": t.entry_time,
-            "exit_time": t.exit_time,
-            "entry_price": t.entry_price,
-            "exit_price": t.exit_price,
-            "size": t.size,
-            "pnl": round(t.pnl, 2),
-            "pnl_pct": round(t.pnl_pct * 100, 3),
-            "r_multiple": round(t.r_multiple, 2),
-            "exit_reason": t.exit_reason,
-            "fees": round(t.fees, 2),
-        })
+        trades_data.append(
+            {
+                "symbol": t.symbol,
+                "direction": "LONG" if t.direction == 1 else "SHORT",
+                "entry_time": t.entry_time,
+                "exit_time": t.exit_time,
+                "entry_price": t.entry_price,
+                "exit_price": t.exit_price,
+                "size": t.size,
+                "pnl": round(t.pnl, 2),
+                "pnl_pct": round(t.pnl_pct * 100, 3),
+                "r_multiple": round(t.r_multiple, 2),
+                "exit_reason": t.exit_reason,
+                "fees": round(t.fees, 2),
+            }
+        )
     trades_df = pd.DataFrame(trades_data)
     trades_path = results_dir / "mean_reversion_trades.csv"
     trades_df.to_csv(trades_path, index=False)
     print(f"Trade log saved to {trades_path}")
-    
+
     # Per-symbol breakdown
     print("\n--- Per-Symbol Breakdown ---")
     for sym in sorted(ohlcv_dict.keys()):
@@ -817,21 +845,25 @@ def main():
         if sym_trades:
             sym_pnl = sum(t.pnl for t in sym_trades)
             sym_wr = len([t for t in sym_trades if t.pnl > 0]) / len(sym_trades) * 100
-            print(f"  {sym}: {len(sym_trades)} trades, PnL ${sym_pnl:.2f}, WR {sym_wr:.1f}%")
+            print(
+                f"  {sym}: {len(sym_trades)} trades, PnL ${sym_pnl:.2f}, WR {sym_wr:.1f}%"
+            )
         else:
             print(f"  {sym}: 0 trades")
-    
+
     # Check against expectations
     print("\n--- Expectations Check ---")
     wr = result.metrics["win_rate_pct"]
     sharpe = result.metrics["sharpe"]
-    
+
     wr_ok = 55 <= wr <= 65
     sharpe_ok = sharpe >= 0.8  # At least 0.8, higher is fine
-    
+
     print(f"  Win rate:     {wr:.1f}% (expected: 55-65%) {'✅' if wr_ok else '❌'}")
-    print(f"  Sharpe:       {sharpe:.2f} (expected: >= 0.8) {'✅' if sharpe_ok else '❌'}")
-    
+    print(
+        f"  Sharpe:       {sharpe:.2f} (expected: >= 0.8) {'✅' if sharpe_ok else '❌'}"
+    )
+
     if wr_ok and sharpe_ok:
         print("\n  ✅ Strategy meets performance expectations!")
     else:

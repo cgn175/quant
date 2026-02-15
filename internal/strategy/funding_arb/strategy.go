@@ -218,20 +218,25 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 		}
 	}
 
-	absFunding := math.Abs(currentFunding)
-	if absFunding < s.cfg.ExitThreshold {
-		shouldClose = true
-		reason = "funding_normalized"
+	// Only check other exit conditions if not already closing due to max loss
+	if !shouldClose {
+		absFunding := math.Abs(currentFunding)
+		if absFunding < s.cfg.ExitThreshold {
+			shouldClose = true
+			reason = "funding_normalized"
+		}
 	}
 
-	// Check if funding flipped against us
-	if pos.Side == "SHORT" && currentFunding < 0 {
-		shouldClose = true
-		reason = "funding_flipped"
-	}
-	if pos.Side == "LONG" && currentFunding > 0 {
-		shouldClose = true
-		reason = "funding_flipped"
+	// Check if funding flipped against us (only if not already closing)
+	if !shouldClose {
+		if pos.Side == "SHORT" && currentFunding < 0 {
+			shouldClose = true
+			reason = "funding_flipped"
+		}
+		if pos.Side == "LONG" && currentFunding > 0 {
+			shouldClose = true
+			reason = "funding_flipped"
+		}
 	}
 
 	if !shouldClose {
