@@ -309,10 +309,10 @@ func TestCalculatePositionSize_MarketVolScalar(t *testing.T) {
 
 func TestMarketVolatilityScalar(t *testing.T) {
 	tests := []struct {
-		btcATR  float64
-		ethATR  float64
-		want    float64
-		desc    string
+		btcATR float64
+		ethATR float64
+		want   float64
+		desc   string
 	}{
 		{0.01, 0.01, 1.2, "quiet market (1% avg ATR)"},
 		{0.015, 0.015, 1.2, "quiet market (1.5% avg ATR)"},
@@ -579,10 +579,13 @@ func TestCheckPartialExit_6R(t *testing.T) {
 	}
 
 	// Now check at 6R: price = 50000 + 6*2000 = 62000
-	// SecondExitPct is 0 in default config, so no 6R partial exit expected
+	// With SecondExitPct = 0.10, we expect a partial exit at 6R
 	partial := ts.CheckPartialExit("BTCUSDT", 62000)
-	if partial != nil {
-		t.Errorf("expected no partial exit at 6R (SecondExitPct=0), got %s", partial.Reason)
+	if partial == nil {
+		t.Fatal("expected partial exit at 6R")
+	}
+	if partial.Reason != "partial_6r" {
+		t.Errorf("expected partial_6r, got %s", partial.Reason)
 	}
 }
 
@@ -728,7 +731,7 @@ func TestOnBar_BasicLongSignal(t *testing.T) {
 		ADXPeriod:          5,
 		ADXThreshold:       15.0, // lower threshold for test
 		VolatilityLow:      0.1,
-		VolatilityHigh:     5.0,  // wide range for test
+		VolatilityHigh:     5.0, // wide range for test
 		FundingExtreme:     0.0005,
 		FundingElevated:    0.0003,
 		RiskPerTrade:       0.01,

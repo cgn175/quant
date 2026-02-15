@@ -156,7 +156,7 @@ func DefaultTrendConfig() TrendConfig {
 		FirstTargetR:          3.0,
 		FirstExitPct:          0.10,
 		SecondTargetR:         6.0,
-		SecondExitPct:         0.0,
+		SecondExitPct:         0.10,
 		MaxDrawdownPct:        0.15,
 		DrawdownHaltHours:     48,
 		MaxLossPerPosition:    0.05,
