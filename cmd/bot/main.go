@@ -450,18 +450,43 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		}(sym, ch)
 	}
 
-	// Subscribe to WebSocket candles
-	for _, sym := range cfg.Symbols {
-		sym := sym
-		ch := tickChans[sym]
-		if err := exchangeClient.SubscribeCandles(sym, cfg.BarSize, func(c exchange.Candle) {
-			select {
-			case ch <- tickEvent{symbol: sym, candle: c}:
-			default:
-				log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
+	// Subscribe to market data (WebSocket or REST polling based on config)
+	marketDataMode := cfg.Exchange.MarketDataMode
+	if marketDataMode == "" {
+		marketDataMode = "websocket" // default
+	}
+	pollInterval := time.Duration(cfg.Exchange.RestPollIntervalMs) * time.Millisecond
+	if pollInterval <= 0 {
+		pollInterval = 1000 * time.Millisecond // default 1 second
+	}
+
+	if marketDataMode == "rest" {
+		log.Info().Str("mode", "rest").Dur("poll_interval", pollInterval).Msg("using REST polling for market data")
+		for _, sym := range cfg.Symbols {
+			sym := sym
+			ch := tickChans[sym]
+			exchangeClient.PollCandles(sym, cfg.BarSize, func(c exchange.Candle) {
+				select {
+				case ch <- tickEvent{symbol: sym, candle: c}:
+				default:
+					log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
+				}
+			}, pollInterval)
+		}
+	} else {
+		log.Info().Str("mode", "websocket").Msg("using WebSocket for market data")
+		for _, sym := range cfg.Symbols {
+			sym := sym
+			ch := tickChans[sym]
+			if err := exchangeClient.SubscribeCandles(sym, cfg.BarSize, func(c exchange.Candle) {
+				select {
+				case ch <- tickEvent{symbol: sym, candle: c}:
+				default:
+					log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
+				}
+			}); err != nil {
+				log.Error().Err(err).Str("symbol", sym).Msg("failed to subscribe")
 			}
-		}); err != nil {
-			log.Error().Err(err).Str("symbol", sym).Msg("failed to subscribe")
 		}
 	}
 
@@ -1146,21 +1171,46 @@ func runMLStrategy(cmd *cobra.Command, cfg *config.Config) error {
 	}
 
 	// ------------------------------------------------------------------ //
-	//  9. Subscribe to WebSocket candles — handlers just push to channels  //
+	//  9. Subscribe to market data (WebSocket or REST polling)             //
 	// ------------------------------------------------------------------ //
-	for _, sym := range cfg.Symbols {
-		sym := sym
-		ch := tickChans[sym]
-		if err := exchangeClient.SubscribeCandles(sym, cfg.BarSize, func(c exchange.Candle) {
-			select {
-			case ch <- tickEvent{symbol: sym, candle: c}:
-			default:
-				// Channel full — drop tick (better than blocking the WS).
-				log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
+	marketDataMode := cfg.Exchange.MarketDataMode
+	if marketDataMode == "" {
+		marketDataMode = "websocket" // default
+	}
+	pollInterval := time.Duration(cfg.Exchange.RestPollIntervalMs) * time.Millisecond
+	if pollInterval <= 0 {
+		pollInterval = 1000 * time.Millisecond // default 1 second
+	}
+
+	if marketDataMode == "rest" {
+		log.Info().Str("mode", "rest").Dur("poll_interval", pollInterval).Msg("using REST polling for market data")
+		for _, sym := range cfg.Symbols {
+			sym := sym
+			ch := tickChans[sym]
+			exchangeClient.PollCandles(sym, cfg.BarSize, func(c exchange.Candle) {
+				select {
+				case ch <- tickEvent{symbol: sym, candle: c}:
+				default:
+					log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
+				}
+			}, pollInterval)
+		}
+	} else {
+		log.Info().Str("mode", "websocket").Msg("using WebSocket for market data")
+		for _, sym := range cfg.Symbols {
+			sym := sym
+			ch := tickChans[sym]
+			if err := exchangeClient.SubscribeCandles(sym, cfg.BarSize, func(c exchange.Candle) {
+				select {
+				case ch <- tickEvent{symbol: sym, candle: c}:
+				default:
+					// Channel full — drop tick (better than blocking the WS).
+					log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
+				}
+			}); err != nil {
+				log.Error().Err(err).Str("symbol", sym).Msg("failed to subscribe")
+				// Non-fatal: other symbols may still work.
 			}
-		}); err != nil {
-			log.Error().Err(err).Str("symbol", sym).Msg("failed to subscribe")
-			// Non-fatal: other symbols may still work.
 		}
 	}
 

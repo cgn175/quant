@@ -274,10 +274,10 @@ func (c *BinanceClient) SubscribeOrderBook(symbol string, handler OrderBookHandl
 	stream := fmt.Sprintf("%s@depth5@100ms", strings.ToLower(symbol))
 
 	sub := &streamSubscription{
-		streamType:  streamTypeOrderBook,
-		stream:      stream,
-		symbol:      symbol,
-		handler:     handler,
+		streamType: streamTypeOrderBook,
+		stream:     stream,
+		symbol:     symbol,
+		handler:    handler,
 	}
 
 	if err := c.addSubscriptionAndReconnect(sub); err != nil {
@@ -652,4 +652,217 @@ func (c *BinanceClient) FetchAllFundingRates() (map[string]*FundingRateInfo, err
 	log.Debug().Int("count", len(results)).Msg("fetched bulk funding rates")
 
 	return results, nil
+}
+
+// ---------------------------------------------------------------------------
+// REST Polling for Market Data (Alternative to WebSocket)
+// Use this when running multiple bots to avoid WebSocket connection limits
+// ---------------------------------------------------------------------------
+
+const (
+	binanceRestBaseURL        = "https://api.binance.com"
+	binanceRestTestnetBaseURL = "https://testnet.binance.vision"
+)
+
+func (c *BinanceClient) restBaseURL() string {
+	if c.testnet {
+		return binanceRestTestnetBaseURL
+	}
+	return binanceRestBaseURL
+}
+
+// binanceKlineRest is the JSON response from GET /api/v3/klines.
+type binanceKlineRest struct {
+	OpenTime         int64  `json:"0"`
+	Open             string `json:"1"`
+	High             string `json:"2"`
+	Low              string `json:"3"`
+	Close            string `json:"4"`
+	Volume           string `json:"5"`
+	CloseTime        int64  `json:"6"`
+	QuoteAssetVolume string `json:"7"`
+	NumTrades        int64  `json:"8"`
+	TakerBuyBaseVol  string `json:"9"`
+	TakerBuyQuoteVol string `json:"10"`
+	Ignore           string `json:"11"`
+}
+
+// PollCandles starts a goroutine that polls for candle data via REST API.
+// This is an alternative to SubscribeCandles which uses WebSocket.
+// Use this when running multiple bots to avoid WebSocket connection limits.
+func (c *BinanceClient) PollCandles(symbol, interval string, handler CandleHandler, pollInterval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+
+		// Fetch immediately on start
+		c.fetchAndEmitCandle(symbol, interval, handler)
+
+		for {
+			select {
+			case <-c.done:
+				return
+			case <-ticker.C:
+				c.fetchAndEmitCandle(symbol, interval, handler)
+			}
+		}
+	}()
+
+	log.Info().
+		Str("symbol", symbol).
+		Str("interval", interval).
+		Dur("poll_interval", pollInterval).
+		Msg("started REST polling for candles")
+}
+
+func (c *BinanceClient) fetchAndEmitCandle(symbol, interval string, handler CandleHandler) {
+	// Fetch latest candle only (limit=1)
+	url := fmt.Sprintf("%s/api/v3/klines?symbol=%s&interval=%s&limit=1",
+		c.restBaseURL(), symbol, interval)
+
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to fetch candles via REST")
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to read candle response body")
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Warn().
+			Str("symbol", symbol).
+			Int("status", resp.StatusCode).
+			Str("body", string(body)).
+			Msg("candle REST API error")
+		return
+	}
+
+	var klines [][]interface{}
+	if err := json.Unmarshal(body, &klines); err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to parse candle JSON")
+		return
+	}
+
+	if len(klines) == 0 {
+		return
+	}
+
+	k := klines[0]
+	if len(k) < 9 {
+		log.Warn().Str("symbol", symbol).Msg("invalid kline data from REST")
+		return
+	}
+
+	open, _ := strconv.ParseFloat(k[1].(string), 64)
+	high, _ := strconv.ParseFloat(k[2].(string), 64)
+	low, _ := strconv.ParseFloat(k[3].(string), 64)
+	closePrice, _ := strconv.ParseFloat(k[4].(string), 64)
+	volume, _ := strconv.ParseFloat(k[5].(string), 64)
+
+	candle := Candle{
+		Symbol:    symbol,
+		OpenTime:  time.UnixMilli(int64(k[0].(float64))),
+		CloseTime: time.UnixMilli(int64(k[6].(float64))),
+		Open:      open,
+		High:      high,
+		Low:       low,
+		Close:     closePrice,
+		Volume:    volume,
+		IsClosed:  true, // REST API returns closed candles
+	}
+
+	handler(candle)
+}
+
+// binanceDepthRest is the JSON response from GET /api/v3/depth.
+type binanceDepthRest struct {
+	LastUpdateID int64      `json:"lastUpdateId"`
+	Bids         [][]string `json:"bids"`
+	Asks         [][]string `json:"asks"`
+}
+
+// PollOrderBook starts a goroutine that polls for orderbook data via REST API.
+// This is an alternative to SubscribeOrderBook which uses WebSocket.
+// Use this when running multiple bots to avoid WebSocket connection limits.
+func (c *BinanceClient) PollOrderBook(symbol string, handler OrderBookHandler, pollInterval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+
+		// Fetch immediately on start
+		c.fetchAndEmitOrderBook(symbol, handler)
+
+		for {
+			select {
+			case <-c.done:
+				return
+			case <-ticker.C:
+				c.fetchAndEmitOrderBook(symbol, handler)
+			}
+		}
+	}()
+
+	log.Info().
+		Str("symbol", symbol).
+		Dur("poll_interval", pollInterval).
+		Msg("started REST polling for orderbook")
+}
+
+func (c *BinanceClient) fetchAndEmitOrderBook(symbol string, handler OrderBookHandler) {
+	// Fetch orderbook (default depth is 100, use limit=5 for efficiency)
+	url := fmt.Sprintf("%s/api/v3/depth?symbol=%s&limit=5", c.restBaseURL(), symbol)
+
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to fetch orderbook via REST")
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to read orderbook response body")
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Warn().
+			Str("symbol", symbol).
+			Int("status", resp.StatusCode).
+			Str("body", string(body)).
+			Msg("orderbook REST API error")
+		return
+	}
+
+	var depth binanceDepthRest
+	if err := json.Unmarshal(body, &depth); err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to parse orderbook JSON")
+		return
+	}
+
+	ob := OrderBook{
+		Symbol:    symbol,
+		Timestamp: time.Now(),
+		Bids:      make([]PriceLevel, len(depth.Bids)),
+		Asks:      make([]PriceLevel, len(depth.Asks)),
+	}
+
+	for i, bid := range depth.Bids {
+		price, _ := strconv.ParseFloat(bid[0], 64)
+		qty, _ := strconv.ParseFloat(bid[1], 64)
+		ob.Bids[i] = PriceLevel{Price: price, Quantity: qty}
+	}
+
+	for i, ask := range depth.Asks {
+		price, _ := strconv.ParseFloat(ask[0], 64)
+		qty, _ := strconv.ParseFloat(ask[1], 64)
+		ob.Asks[i] = PriceLevel{Price: price, Quantity: qty}
+	}
+
+	handler(ob)
 }

@@ -32,6 +32,8 @@ type OrderBookHandler func(ob OrderBook)
 type Client interface {
 	SubscribeCandles(symbol, interval string, handler CandleHandler) error
 	SubscribeOrderBook(symbol string, handler OrderBookHandler) error
+	PollCandles(symbol, interval string, handler CandleHandler, pollInterval time.Duration)
+	PollOrderBook(symbol string, handler OrderBookHandler, pollInterval time.Duration)
 	FetchFundingRate(symbol string) (*FundingRateInfo, error)
 	FetchFundingRates(symbols []string) (map[string]*FundingRateInfo, error)
 	FetchAllFundingRates() (map[string]*FundingRateInfo, error)
