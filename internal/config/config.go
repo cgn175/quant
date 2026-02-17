@@ -28,16 +28,8 @@ type ExchangeConfig struct {
 	APISecret string `mapstructure:"api_secret"`
 	Testnet   bool   `mapstructure:"testnet"`
 
-	// Market data connection mode: "websocket" (default) or "rest"
-	// Use "rest" when running multiple bots to avoid WebSocket connection limits
-	MarketDataMode string `mapstructure:"market_data_mode"`
-
-	// REST polling interval in milliseconds (only used when MarketDataMode = "rest")
-	// How often to poll for candles and orderbook updates
-	RestPollIntervalMs int `mapstructure:"rest_poll_interval_ms"`
-
 	// HubURL is the WebSocket URL of the central WS hub (e.g. "localhost:9090").
-	// When set, bots connect to the hub instead of directly to Binance WebSocket.
+	// All bots connect to the hub which maintains a single Binance WS connection.
 	HubURL string `mapstructure:"hub_url"`
 }
 
@@ -336,8 +328,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("exchange.name", "binance")
 	v.SetDefault("exchange.testnet", true)
-	v.SetDefault("exchange.market_data_mode", "websocket")
-	v.SetDefault("exchange.rest_poll_interval_ms", 1000)
+	v.SetDefault("exchange.hub_url", "localhost:9090")
 
 	v.SetDefault("sentiment.url", "http://localhost:8000")
 	v.SetDefault("sentiment.poll_interval_seconds", 60)

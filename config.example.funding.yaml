@@ -8,7 +8,7 @@ symbols:
 exchange:
   name: binance
   testnet: true
-  # hub_url: "localhost:9090"  # Uncomment to use central WS hub instead of direct Binance WS
+  hub_url: "localhost:9090"
 
 strategy:
   type: funding_arb

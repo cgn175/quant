@@ -5,7 +5,7 @@ exchange:
   testnet: true
   api_key: "YOUR_API_KEY"
   api_secret: "YOUR_API_SECRET"
-  # hub_url: "localhost:9090"  # Uncomment to use central WS hub instead of direct Binance WS
+  hub_url: "localhost:9090"
 
 symbols:
   - BTCUSDT

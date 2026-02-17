@@ -448,43 +448,18 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 		}(sym, ch)
 	}
 
-	// Subscribe to market data (WebSocket or REST polling based on config)
-	marketDataMode := cfg.Exchange.MarketDataMode
-	if marketDataMode == "" {
-		marketDataMode = "websocket" // default
-	}
-	pollInterval := time.Duration(cfg.Exchange.RestPollIntervalMs) * time.Millisecond
-	if pollInterval <= 0 {
-		pollInterval = 1000 * time.Millisecond // default 1 second
-	}
-
-	if marketDataMode == "rest" {
-		log.Info().Str("mode", "rest").Dur("poll_interval", pollInterval).Msg("using REST polling for market data")
-		for _, sym := range cfg.Symbols {
-			sym := sym
-			ch := tickChans[sym]
-			exchangeClient.PollCandles(sym, cfg.BarSize, func(c exchange.Candle) {
-				select {
-				case ch <- tickEvent{symbol: sym, candle: c}:
-				default:
-					log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
-				}
-			}, pollInterval)
-		}
-	} else {
-		log.Info().Str("mode", "websocket").Msg("using WebSocket for market data")
-		for _, sym := range cfg.Symbols {
-			sym := sym
-			ch := tickChans[sym]
-			if err := exchangeClient.SubscribeCandles(sym, cfg.BarSize, func(c exchange.Candle) {
-				select {
-				case ch <- tickEvent{symbol: sym, candle: c}:
-				default:
-					log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
-				}
-			}); err != nil {
-				log.Error().Err(err).Str("symbol", sym).Msg("failed to subscribe")
+	// Subscribe to market data via WS hub
+	for _, sym := range cfg.Symbols {
+		sym := sym
+		ch := tickChans[sym]
+		if err := exchangeClient.SubscribeCandles(sym, cfg.BarSize, func(c exchange.Candle) {
+			select {
+			case ch <- tickEvent{symbol: sym, candle: c}:
+			default:
+				log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
 			}
+		}); err != nil {
+			log.Error().Err(err).Str("symbol", sym).Msg("failed to subscribe")
 		}
 	}
 
@@ -1169,46 +1144,19 @@ func runMLStrategy(cmd *cobra.Command, cfg *config.Config) error {
 	}
 
 	// ------------------------------------------------------------------ //
-	//  9. Subscribe to market data (WebSocket or REST polling)             //
+	//  9. Subscribe to market data via WS hub                              //
 	// ------------------------------------------------------------------ //
-	marketDataMode := cfg.Exchange.MarketDataMode
-	if marketDataMode == "" {
-		marketDataMode = "websocket" // default
-	}
-	pollInterval := time.Duration(cfg.Exchange.RestPollIntervalMs) * time.Millisecond
-	if pollInterval <= 0 {
-		pollInterval = 1000 * time.Millisecond // default 1 second
-	}
-
-	if marketDataMode == "rest" {
-		log.Info().Str("mode", "rest").Dur("poll_interval", pollInterval).Msg("using REST polling for market data")
-		for _, sym := range cfg.Symbols {
-			sym := sym
-			ch := tickChans[sym]
-			exchangeClient.PollCandles(sym, cfg.BarSize, func(c exchange.Candle) {
-				select {
-				case ch <- tickEvent{symbol: sym, candle: c}:
-				default:
-					log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
-				}
-			}, pollInterval)
-		}
-	} else {
-		log.Info().Str("mode", "websocket").Msg("using WebSocket for market data")
-		for _, sym := range cfg.Symbols {
-			sym := sym
-			ch := tickChans[sym]
-			if err := exchangeClient.SubscribeCandles(sym, cfg.BarSize, func(c exchange.Candle) {
-				select {
-				case ch <- tickEvent{symbol: sym, candle: c}:
-				default:
-					// Channel full — drop tick (better than blocking the WS).
-					log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
-				}
-			}); err != nil {
-				log.Error().Err(err).Str("symbol", sym).Msg("failed to subscribe")
-				// Non-fatal: other symbols may still work.
+	for _, sym := range cfg.Symbols {
+		sym := sym
+		ch := tickChans[sym]
+		if err := exchangeClient.SubscribeCandles(sym, cfg.BarSize, func(c exchange.Candle) {
+			select {
+			case ch <- tickEvent{symbol: sym, candle: c}:
+			default:
+				log.Warn().Str("symbol", sym).Msg("tick channel full, dropping candle")
 			}
+		}); err != nil {
+			log.Error().Err(err).Str("symbol", sym).Msg("failed to subscribe")
 		}
 	}
 
@@ -2166,12 +2114,8 @@ func escapeMarkdownV2Telegram(s string) string {
 	return replacer.Replace(s)
 }
 
-// newExchangeClient creates the appropriate exchange.Client based on config.
-// If hub_url is set, it connects via the local WS hub; otherwise direct to Binance.
+// newExchangeClient creates an exchange.Client that connects via the central WS hub.
 func newExchangeClient(cfg *config.Config) exchange.Client {
-	if cfg.Exchange.HubURL != "" {
-		log.Info().Str("hub_url", cfg.Exchange.HubURL).Msg("using WS hub for market data")
-		return exchange.NewHubClient(cfg.Exchange.HubURL, cfg.Exchange.Testnet)
-	}
-	return exchange.NewBinanceClient(cfg.Exchange.Testnet)
+	log.Info().Str("hub_url", cfg.Exchange.HubURL).Msg("using WS hub for market data")
+	return exchange.NewHubClient(cfg.Exchange.HubURL, cfg.Exchange.Testnet)
 }
