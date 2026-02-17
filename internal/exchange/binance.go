@@ -380,7 +380,7 @@ func (c *BinanceClient) pingLoop(conn *websocket.Conn, gen uint64) {
 func (c *BinanceClient) handleStreamMessage(sub *streamSubscription, data json.RawMessage) {
 	switch sub.streamType {
 	case streamTypeCandle:
-		candle, err := parseKlineMessage(data)
+		candle, err := ParseKlineMessage(data)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to parse kline message")
 			return
@@ -390,7 +390,7 @@ func (c *BinanceClient) handleStreamMessage(sub *streamSubscription, data json.R
 		}
 
 	case streamTypeOrderBook:
-		ob, err := parseDepthMessage(data, sub.symbol)
+		ob, err := ParseDepthMessage(data, sub.symbol)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to parse depth message")
 			return
@@ -428,7 +428,7 @@ type binanceKline struct {
 	Ignore       string `json:"B"`
 }
 
-func parseKlineMessage(data []byte) (Candle, error) {
+func ParseKlineMessage(data []byte) (Candle, error) {
 	var event binanceKlineEvent
 	if err := json.Unmarshal(data, &event); err != nil {
 		return Candle{}, err
@@ -475,7 +475,7 @@ type binanceDepthEvent struct {
 	Asks [][]string `json:"asks"`
 }
 
-func parseDepthMessage(data []byte, symbol string) (OrderBook, error) {
+func ParseDepthMessage(data []byte, symbol string) (OrderBook, error) {
 	var event binanceDepthEvent
 	if err := json.Unmarshal(data, &event); err != nil {
 		return OrderBook{}, err

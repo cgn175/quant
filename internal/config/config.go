@@ -35,6 +35,10 @@ type ExchangeConfig struct {
 	// REST polling interval in milliseconds (only used when MarketDataMode = "rest")
 	// How often to poll for candles and orderbook updates
 	RestPollIntervalMs int `mapstructure:"rest_poll_interval_ms"`
+
+	// HubURL is the WebSocket URL of the central WS hub (e.g. "localhost:9090").
+	// When set, bots connect to the hub instead of directly to Binance WebSocket.
+	HubURL string `mapstructure:"hub_url"`
 }
 
 type SentimentConfig struct {

@@ -389,9 +389,7 @@ func runTrendFollowing(cmd *cobra.Command, cfg *config.Config) error {
 	// ------------------------------------------------------------------ //
 	//  Exchange client                                                    //
 	// ------------------------------------------------------------------ //
-	//  Exchange client                                                    //
-	// ------------------------------------------------------------------ //
-	var exchangeClient exchange.Client = exchange.NewBinanceClient(cfg.Exchange.Testnet)
+	var exchangeClient exchange.Client = newExchangeClient(cfg)
 	defer exchangeClient.Close()
 
 	// ------------------------------------------------------------------ //
@@ -1127,7 +1125,7 @@ func runMLStrategy(cmd *cobra.Command, cfg *config.Config) error {
 	//  7. Exchange client                                                 //
 	// ------------------------------------------------------------------ //
 
-	var exchangeClient exchange.Client = exchange.NewBinanceClient(cfg.Exchange.Testnet)
+	var exchangeClient exchange.Client = newExchangeClient(cfg)
 	defer exchangeClient.Close()
 
 	// ------------------------------------------------------------------ //
@@ -1836,7 +1834,7 @@ func runMarketMaking(cmd *cobra.Command, cfg *config.Config) error {
 	}()
 
 	// Exchange client
-	var exchangeClient exchange.Client = exchange.NewBinanceClient(cfg.Exchange.Testnet)
+	var exchangeClient exchange.Client = newExchangeClient(cfg)
 	defer exchangeClient.Close()
 
 	// Executor
@@ -1907,7 +1905,7 @@ func runFundingArb(cmd *cobra.Command, cfg *config.Config) error {
 	}()
 
 	// Exchange client
-	var exchangeClient exchange.Client = exchange.NewBinanceClient(cfg.Exchange.Testnet)
+	var exchangeClient exchange.Client = newExchangeClient(cfg)
 	defer exchangeClient.Close()
 
 	// Executor
@@ -2166,4 +2164,14 @@ func escapeMarkdownV2Telegram(s string) string {
 		`!`, `\!`,
 	)
 	return replacer.Replace(s)
+}
+
+// newExchangeClient creates the appropriate exchange.Client based on config.
+// If hub_url is set, it connects via the local WS hub; otherwise direct to Binance.
+func newExchangeClient(cfg *config.Config) exchange.Client {
+	if cfg.Exchange.HubURL != "" {
+		log.Info().Str("hub_url", cfg.Exchange.HubURL).Msg("using WS hub for market data")
+		return exchange.NewHubClient(cfg.Exchange.HubURL, cfg.Exchange.Testnet)
+	}
+	return exchange.NewBinanceClient(cfg.Exchange.Testnet)
 }
