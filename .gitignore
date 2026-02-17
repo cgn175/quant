@@ -1,6 +1,5 @@
 # Binaries
 bin/
-bot
 *.exe
 
 # Go build cache
@@ -95,4 +94,3 @@ sentiment/models/
 sentiment/models_local/
 
 stats*.json
-wshub

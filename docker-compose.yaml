@@ -50,7 +50,7 @@ services:
     container_name: quant-wshub
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "9089:9090"
 
 volumes:
   redis_data:
