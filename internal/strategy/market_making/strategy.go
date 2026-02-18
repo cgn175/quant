@@ -322,10 +322,21 @@ func (s *Strategy) computeDynamicSpread(sym string, price, vol float64) float64 
 }
 
 // checkFills detects filled orders and tracks round trips + inventory.
+// For paper trading, it also tries to fill limit orders based on current market price.
 func (s *Strategy) checkFills(sym string) {
 	orders, ok := s.orders[sym]
 	if !ok {
 		return
+	}
+
+	// Get current market price for paper trading fill simulation
+	currentPrice := s.prices[sym]
+
+	// Try to fill paper limit orders first
+	if paperExec, ok := s.executor.(*execution.PaperExecutor); ok && currentPrice > 0 {
+		for _, order := range orders {
+			paperExec.TryFillLimitOrder(order.ID, currentPrice)
+		}
 	}
 
 	// Initialize pending round trip if not exists

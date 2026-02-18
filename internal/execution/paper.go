@@ -67,6 +67,8 @@ func (p *PaperExecutor) ExecuteLimitOrder(symbol string, side OrderSide, price, 
 	orderID := p.nextOrderID()
 	now := time.Now()
 
+	// Limit orders start as NEW and are filled only when market price crosses
+	// the limit price (via TryFillLimitOrder)
 	order := &Order{
 		ID:            orderID,
 		Symbol:        symbol,
@@ -74,9 +76,7 @@ func (p *PaperExecutor) ExecuteLimitOrder(symbol string, side OrderSide, price, 
 		Side:          side,
 		Price:         price,
 		Size:          size,
-		Status:        OrderStatusFilled,
-		FilledPrice:   price,
-		FilledSize:    size,
+		Status:        OrderStatusNew,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		ClientOrderID: fmt.Sprintf("paper_%s_%d", symbol, now.UnixNano()),
@@ -87,6 +87,44 @@ func (p *PaperExecutor) ExecuteLimitOrder(symbol string, side OrderSide, price, 
 	p.mu.Unlock()
 
 	return order, nil
+}
+
+// TryFillLimitOrder checks if a limit order should be filled based on current market price.
+// For BUY orders: fills if market price <= limit price
+// For SELL orders: fills if market price >= limit price
+// Returns true if the order was filled, false otherwise.
+func (p *PaperExecutor) TryFillLimitOrder(orderID string, marketPrice float64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	order, exists := p.orders[orderID]
+	if !exists {
+		return false
+	}
+
+	// Only process open limit orders
+	if order.Status != OrderStatusNew || order.Type != OrderTypeLimit {
+		return false
+	}
+
+	shouldFill := false
+	if order.Side == OrderSideBuy && marketPrice <= order.Price {
+		// Buy order fills when market price is at or below limit
+		shouldFill = true
+	} else if order.Side == OrderSideSell && marketPrice >= order.Price {
+		// Sell order fills when market price is at or above limit
+		shouldFill = true
+	}
+
+	if shouldFill {
+		order.FilledPrice = order.Price
+		order.FilledSize = order.Size
+		order.Status = OrderStatusFilled
+		order.UpdatedAt = time.Now()
+		return true
+	}
+
+	return false
 }
 
 // SimulateFill fills a market order at the given market price with slippage

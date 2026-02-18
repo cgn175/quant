@@ -140,31 +140,28 @@ func (c *HubClient) sendSubscribe(stream string) error {
 }
 
 func (c *HubClient) ensureConnected() error {
-	c.mu.RLock()
-	connected := c.connected
-	c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if connected {
+	if c.connected {
 		return nil
 	}
 
-	return c.connectToHub()
+	return c.connectToHubLocked()
 }
 
-func (c *HubClient) connectToHub() error {
+func (c *HubClient) connectToHubLocked() error {
 	url := "ws://" + c.hubURL
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		return fmt.Errorf("hub: failed to connect to %s: %w", url, err)
 	}
 
-	c.mu.Lock()
 	if c.conn != nil {
 		c.conn.Close()
 	}
 	c.conn = conn
 	c.connected = true
-	c.mu.Unlock()
 
 	log.Info().Str("url", url).Msg("hub: connected")
 
@@ -200,6 +197,7 @@ func (c *HubClient) readLoop(conn *websocket.Conn) {
 			continue
 		}
 
+		log.Info().Str("stream", msg.Stream).Msg("hub: received tick")
 		c.dispatchMessage(msg)
 	}
 }
@@ -223,7 +221,7 @@ func (c *HubClient) dispatchMessage(msg hubMessage) {
 			return
 		}
 		if h, ok := handler.(CandleHandler); ok {
-			h(candle)
+			go h(candle)
 		}
 
 	case streamTypeOrderBook:
@@ -233,7 +231,7 @@ func (c *HubClient) dispatchMessage(msg hubMessage) {
 			return
 		}
 		if h, ok := handler.(OrderBookHandler); ok {
-			h(ob)
+			go h(ob)
 		}
 	}
 }
@@ -258,7 +256,11 @@ func (c *HubClient) reconnectWithBackoff() {
 
 		log.Info().Dur("backoff", backoff).Msg("hub: attempting reconnect")
 
-		if err := c.connectToHub(); err != nil {
+		c.mu.Lock()
+		err := c.connectToHubLocked()
+		c.mu.Unlock()
+
+		if err != nil {
 			log.Error().Err(err).Dur("backoff", backoff).Msg("hub: reconnect failed, will retry")
 			time.Sleep(backoff)
 			backoff = time.Duration(math.Min(float64(backoff)*backoffFactor, float64(maxBackoff)))
