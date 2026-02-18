@@ -197,7 +197,7 @@ func (c *HubClient) readLoop(conn *websocket.Conn) {
 			continue
 		}
 
-		log.Info().Str("stream", msg.Stream).Msg("hub: received tick")
+		//log.Info().Str("stream", msg.Stream).Msg("hub: received tick")
 		c.dispatchMessage(msg)
 	}
 }
