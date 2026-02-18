@@ -605,6 +605,25 @@ func (ts *TrendStrategy) OnBar(
 	}
 
 	// ---------------------------------------------------------------
+	// Pre-compute indicators for Layer 2 (optimization: compute once, use many)
+	// ---------------------------------------------------------------
+	// Compute ADX once - used in multiple regime filter branches
+	adxVals := features.ADX(candles, cfg.ADXPeriod)
+	// Compute ATR once - used for volatility filter and stop calculation
+	atrFast := features.ATR(candles, cfg.ATRPeriod)
+	atrSlow := features.ATR(candles, 50)
+	if adxVals == nil || atrFast == nil || atrSlow == nil {
+		return nil
+	}
+
+	// Pre-compute volatility features ONCE if either ensemble or dynamic stop is enabled
+	// (optimization: compute here so it can be reused by both regime filter ensemble check AND dynamic stop)
+	var volFeatures map[string]float64
+	if (cfg.EnsembleEnabled && cfg.EnsembleSymbols[symbol]) || (cfg.DynamicStopEnabled && ts.mlClient != nil && ts.mlClient.IsEnabled()) {
+		volFeatures = BuildVolatilityFeatures(candles, idx)
+	}
+
+	// ---------------------------------------------------------------
 	// Layer 2: Regime filters
 	// ---------------------------------------------------------------
 
@@ -653,8 +672,8 @@ func (ts *TrendStrategy) OnBar(
 				if ts.prom != nil {
 					ts.prom.MLFilterFallbackTotal.Inc()
 				}
-				adxVals := features.ADX(candles, cfg.ADXPeriod)
-				if adxVals == nil || adxVals[idx] < cfg.ADXThreshold {
+				// Use cached ADX instead of recomputing
+				if adxVals[idx] < cfg.ADXThreshold {
 					if ts.prom != nil {
 						ts.prom.ADXFilterBlockedTotal.WithLabelValues(symbol).Inc()
 					}
@@ -677,8 +696,8 @@ func (ts *TrendStrategy) OnBar(
 			log.Debug().Str("symbol", symbol).Float64("prob_safe", probSafe).Msg("Regime filter passed (SAFE_TO_TRADE)")
 
 			// Ensemble filter: require vol-predicted stop ≤ threshold
-			if cfg.EnsembleEnabled && cfg.EnsembleSymbols[symbol] && ts.mlClient != nil {
-				volFeatures := BuildVolatilityFeatures(candles, idx)
+			// Use pre-computed volFeatures (optimization: computed once at top of function)
+			if cfg.EnsembleEnabled && cfg.EnsembleSymbols[symbol] && ts.mlClient != nil && volFeatures != nil {
 				predRangePct, err := ts.mlClient.PredictVolatility(context.Background(), symbol, volFeatures)
 				if err != nil {
 					log.Warn().Err(err).Str("symbol", symbol).Msg("Ensemble vol prediction error, skipping ensemble check")
@@ -724,8 +743,8 @@ func (ts *TrendStrategy) OnBar(
 				if ts.prom != nil {
 					ts.prom.MLFilterFallbackTotal.Inc()
 				}
-				adxVals := features.ADX(candles, cfg.ADXPeriod)
-				if adxVals == nil || adxVals[idx] < cfg.ADXThreshold {
+				// Use cached ADX instead of recomputing
+				if adxVals[idx] < cfg.ADXThreshold {
 					if ts.prom != nil {
 						ts.prom.ADXFilterBlockedTotal.WithLabelValues(symbol).Inc()
 					}
@@ -747,8 +766,8 @@ func (ts *TrendStrategy) OnBar(
 			}
 		}
 	} else {
-		adxVals := features.ADX(candles, cfg.ADXPeriod)
-		if adxVals == nil || adxVals[idx] < cfg.ADXThreshold {
+		// Use cached ADX instead of recomputing
+		if adxVals[idx] < cfg.ADXThreshold {
 			log.Debug().Str("symbol", symbol).Float64("adx", safeIdx(adxVals, idx)).Msg("ADX filter blocked signal")
 			if ts.prom != nil {
 				ts.prom.ADXFilterBlockedTotal.WithLabelValues(symbol).Inc()
@@ -757,12 +776,7 @@ func (ts *TrendStrategy) OnBar(
 		}
 	}
 
-	// 2b. Volatility filter — ATR(14) / ATR(50) in normal range
-	atrFast := features.ATR(candles, cfg.ATRPeriod)
-	atrSlow := features.ATR(candles, 50)
-	if atrFast == nil || atrSlow == nil {
-		return nil
-	}
+	// 2b. Volatility filter — ATR(14) / ATR(50) in normal range (use cached values)
 	if atrSlow[idx] > 0 {
 		atrRatio := atrFast[idx] / atrSlow[idx]
 		if atrRatio < cfg.VolatilityLow || atrRatio > cfg.VolatilityHigh {
@@ -791,9 +805,12 @@ func (ts *TrendStrategy) OnBar(
 	atrVal := atrFast[idx]
 	stopDistance := cfg.ATRStopMult * atrVal
 
+	// Use pre-computed volFeatures for dynamic stop (optimization: computed once at top of function)
+	// Note: volFeatures already computed if DynamicStopEnabled (moved earlier in function)
+
 	// 2d. Dynamic Stop-Loss — use ML volatility prediction if enabled
 	if cfg.DynamicStopEnabled && ts.mlClient != nil && ts.mlClient.IsEnabled() {
-		volFeatures := BuildVolatilityFeatures(candles, idx)
+		// Use cached volFeatures instead of building again
 		predRangePct, err := ts.mlClient.PredictVolatility(context.Background(), symbol, volFeatures)
 		if err != nil {
 			log.Warn().Err(err).Str("symbol", symbol).Msg("Dynamic stop prediction error, falling back to ATR")
@@ -847,7 +864,7 @@ func (ts *TrendStrategy) OnBar(
 		Float64("price", last.Close).
 		Float64("stop_loss", stopLoss).
 		Float64("atr", atrVal).
-		Float64("adx", safeIdx(features.ADX(candles, cfg.ADXPeriod), idx)).
+		Float64("adx", safeIdx(adxVals, idx)).
 		Float64("size_mult", sizeMultiplier).
 		Msg("trend entry signal generated")
 
