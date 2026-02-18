@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/cgn175/quant-bot/internal/config"
+	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/execution"
 	"github.com/cgn175/quant-bot/internal/strategy"
@@ -27,6 +28,7 @@ type Strategy struct {
 	client     exchange.Client
 	executor   execution.Executor
 	execEngine *execution.Engine
+	store      *data.FundingStore
 	symbols    []string
 
 	mu        sync.RWMutex
@@ -35,6 +37,7 @@ type Strategy struct {
 
 // arbPosition tracks an active funding arb position.
 type arbPosition struct {
+	dbID             int64 // row ID in arb_positions table
 	Symbol           string
 	Side             string // "SHORT" (collecting positive funding) or "LONG" (collecting negative funding)
 	EntryPrice       float64
@@ -45,12 +48,13 @@ type arbPosition struct {
 	FundingPayments  int     // number of funding payments received
 }
 
-func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string) *Strategy {
+func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore) *Strategy {
 	return &Strategy{
 		cfg:        cfg,
 		client:     client,
 		executor:   executor,
 		execEngine: execEngine,
+		store:      store,
 		symbols:    symbols,
 		positions:  make(map[string]*arbPosition),
 	}
@@ -64,8 +68,48 @@ func (s *Strategy) Start(ctx context.Context) error {
 		Float64("position_size_usd", s.cfg.PositionSizeUSD).
 		Msg("starting funding rate arbitrage strategy")
 
+	// Restore open positions from DB
+	if s.store != nil {
+		if err := s.restorePositions(); err != nil {
+			log.Error().Err(err).Msg("failed to restore arb positions from DB")
+		}
+	}
+
 	// Run the main scan loop
 	go s.runLoop(ctx)
+	return nil
+}
+
+// restorePositions loads open positions from the database into the in-memory map.
+func (s *Strategy) restorePositions() error {
+	positions, err := s.store.LoadOpenPositions()
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, p := range positions {
+		s.positions[p.Symbol] = &arbPosition{
+			dbID:             p.ID,
+			Symbol:           p.Symbol,
+			Side:             p.Side,
+			EntryPrice:       p.EntryPrice,
+			Size:             p.Size,
+			EntryTime:        p.EntryTime,
+			EntryFunding:     p.EntryFunding,
+			FundingCollected: p.FundingCollected,
+			FundingPayments:  p.FundingPayments,
+		}
+		log.Info().
+			Str("symbol", p.Symbol).
+			Str("side", p.Side).
+			Float64("entry_price", p.EntryPrice).
+			Float64("size", p.Size).
+			Msg("funding arb: restored position from DB")
+	}
+
 	return nil
 }
 
@@ -105,6 +149,8 @@ func (s *Strategy) scanAndManage() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now()
+
 	for _, sym := range s.symbols {
 		info, ok := rates[sym]
 		if !ok {
@@ -112,6 +158,14 @@ func (s *Strategy) scanAndManage() {
 		}
 
 		fundingRate := info.FundingRate
+
+		// Persist every funding rate snapshot
+		if s.store != nil {
+			if err := s.store.InsertFundingRate(sym, fundingRate, info.MarkPrice, now); err != nil {
+				log.Error().Err(err).Str("symbol", sym).Msg("failed to persist funding rate")
+			}
+		}
+
 		pos, hasPos := s.positions[sym]
 
 		if hasPos {
@@ -162,7 +216,7 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 		return
 	}
 
-	s.positions[sym] = &arbPosition{
+	pos := &arbPosition{
 		Symbol:       sym,
 		Side:         side,
 		EntryPrice:   order.FilledPrice,
@@ -170,6 +224,26 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 		EntryTime:    time.Now(),
 		EntryFunding: fundingRate,
 	}
+
+	// Persist to DB
+	if s.store != nil {
+		dbPos := &data.ArbPosition{
+			Symbol:       pos.Symbol,
+			Side:         pos.Side,
+			EntryPrice:   pos.EntryPrice,
+			Size:         pos.Size,
+			EntryTime:    pos.EntryTime,
+			EntryFunding: pos.EntryFunding,
+		}
+		id, err := s.store.SavePosition(dbPos)
+		if err != nil {
+			log.Error().Err(err).Str("symbol", sym).Msg("failed to persist arb position")
+		} else {
+			pos.dbID = id
+		}
+	}
+
+	s.positions[sym] = pos
 
 	// Annualized yield: funding * 3 payments/day * 365 days
 	annualizedYield := math.Abs(fundingRate) * 3 * 365 * 100
@@ -188,14 +262,24 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, markPrice float64) {
 	// Track estimated funding collection
 	// (simplified: assumes we've been in since last check and received funding)
+	fundingUpdated := false
 	if pos.Side == "SHORT" && currentFunding > 0 {
 		payment := currentFunding * pos.Size * markPrice
 		pos.FundingCollected += payment
 		pos.FundingPayments++
+		fundingUpdated = true
 	} else if pos.Side == "LONG" && currentFunding < 0 {
 		payment := math.Abs(currentFunding) * pos.Size * markPrice
 		pos.FundingCollected += payment
 		pos.FundingPayments++
+		fundingUpdated = true
+	}
+
+	// Persist funding collection update
+	if fundingUpdated && s.store != nil && pos.dbID > 0 {
+		if err := s.store.UpdatePosition(pos.dbID, pos.FundingCollected, pos.FundingPayments); err != nil {
+			log.Error().Err(err).Str("symbol", sym).Msg("failed to update arb position in DB")
+		}
 	}
 
 	// Exit conditions:
@@ -261,6 +345,13 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 		return
 	}
 
+	// Persist close to DB
+	if s.store != nil && pos.dbID > 0 {
+		if err := s.store.ClosePosition(pos.dbID, reason, markPrice, time.Now()); err != nil {
+			log.Error().Err(err).Str("symbol", sym).Msg("failed to close arb position in DB")
+		}
+	}
+
 	// Calculate price PnL
 	var pricePnL float64
 	if pos.Side == "SHORT" {
@@ -303,6 +394,13 @@ func (s *Strategy) closeAllPositions() {
 			log.Error().Err(err).Str("symbol", sym).Msg("funding arb: shutdown close failed")
 		} else {
 			log.Info().Str("symbol", sym).Msg("funding arb: closed position on shutdown")
+		}
+
+		// Mark closed in DB (graceful shutdown, not a loss)
+		if s.store != nil && pos.dbID > 0 {
+			if err := s.store.ClosePosition(pos.dbID, "shutdown", 0, time.Now()); err != nil {
+				log.Error().Err(err).Str("symbol", sym).Msg("failed to close arb position in DB on shutdown")
+			}
 		}
 	}
 	s.positions = make(map[string]*arbPosition)

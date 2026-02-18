@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/cgn175/quant-bot/internal/config"
+	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/execution"
 	"github.com/cgn175/quant-bot/internal/metrics"
 	fundingarb "github.com/cgn175/quant-bot/internal/strategy/funding_arb"
@@ -63,8 +64,15 @@ func RunFundingArb(cmd *cobra.Command, cfg *config.Config) error {
 		}
 	}()
 
+	// Funding store (SQLite persistence for positions + rates)
+	fundingStore, err := data.NewFundingStore(cfg.Strategy.FundingArb.DBPath)
+	if err != nil {
+		return fmt.Errorf("open funding store: %w", err)
+	}
+	defer fundingStore.Close()
+
 	// Strategy
-	strat := fundingarb.NewStrategy(cfg.Strategy.FundingArb, exchangeClient, executor, execEngine, cfg.Symbols)
+	strat := fundingarb.NewStrategy(cfg.Strategy.FundingArb, exchangeClient, executor, execEngine, cfg.Symbols, fundingStore)
 
 	// Block until context cancelled
 	if err := strat.Start(ctx); err != nil {

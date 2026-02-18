@@ -210,6 +210,7 @@ type FundingArbConfig struct {
 	PositionSizeUSD float64 `mapstructure:"position_size_usd"` // USD value per position
 	ScanIntervalMs  int     `mapstructure:"scan_interval_ms"`  // How often to check funding rates
 	MaxLossPct      float64 `mapstructure:"max_loss_pct"`      // Max loss per position before forced close (e.g., 0.03 = 3%)
+	DBPath          string  `mapstructure:"db_path"`           // Path to SQLite database for position/rate persistence
 }
 
 // StorageConfig holds data persistence configuration.
@@ -422,6 +423,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.funding_arb.position_size_usd", 1000.0) // $1000 per position
 	v.SetDefault("strategy.funding_arb.scan_interval_ms", 300000)  // 5 minutes
 	v.SetDefault("strategy.funding_arb.max_loss_pct", 0.03)        // 3% max loss per position
+	v.SetDefault("strategy.funding_arb.db_path", "funding.db")    // SQLite DB for positions/rates
 
 	// Storage defaults
 	v.SetDefault("storage.candle_db_path", "candles.db")
