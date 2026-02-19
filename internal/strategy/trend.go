@@ -86,6 +86,10 @@ type TrendConfig struct {
 	DirectionalRegimeEnabled bool
 	DirectionalRegimeSymbols map[string]bool // symbols that use directional models
 
+	// HMM regime detection (probabilistic states)
+	UseHMM          bool    // Use HMM instead of RandomForest (default: false)
+	HMMTrendingProb float64 // Min probability for "trending" state (default: 0.6)
+
 	// Dynamic Stop-Loss (Volatility Reader) parameters
 	DynamicStopEnabled bool
 	DynamicStopK       float64 // multiplier for predicted range → stop %
@@ -662,14 +666,59 @@ func (ts *TrendStrategy) OnBar(
 			regimeFeatures = BuildRegimeFeatures(candles, fundingCache, symbol, idx, sent)
 		}
 		mlStart := time.Now()
-		// Use directional model if available for this symbol
+		// Use HMM if enabled, otherwise use RandomForest
 		var probSafe float64
 		var err error
-		if cfg.DirectionalRegimeEnabled && cfg.DirectionalRegimeSymbols[symbol] {
+		
+		if cfg.UseHMM {
+			// HMM regime detection (probabilistic states)
+			hmmFeatures := map[string]float64{
+				"returns":      regimeFeatures["returns_20"],
+				"volatility":   regimeFeatures["volatility_20"],
+				"volume_ratio": regimeFeatures["volume_ratio_20"],
+			}
+			
+			resp, hmmErr := ts.mlClient.PredictRegimeHMM(context.Background(), symbol, hmmFeatures)
+			if hmmErr != nil {
+				err = hmmErr
+			} else {
+				// Check if in "trending" state with sufficient probability
+				trendingProb := cfg.HMMTrendingProb
+				if trendingProb <= 0 {
+					trendingProb = 0.6 // default
+				}
+				
+				// Find trending state (label == "trending")
+				isTrending := false
+				if resp.Label == "trending" {
+					// Get probability of current state
+					if resp.State >= 0 && resp.State < len(resp.Probabilities) {
+						stateProb := resp.Probabilities[resp.State]
+						isTrending = stateProb >= trendingProb
+					}
+				}
+				
+				// Convert to probSafe (1.0 if trending, 0.0 otherwise)
+				if isTrending {
+					probSafe = 1.0
+				} else {
+					probSafe = 0.0
+				}
+				
+				log.Debug().
+					Str("symbol", symbol).
+					Int("state", resp.State).
+					Str("label", resp.Label).
+					Interface("probs", resp.Probabilities).
+					Bool("is_trending", isTrending).
+					Msg("HMM regime detection")
+			}
+		} else if cfg.DirectionalRegimeEnabled && cfg.DirectionalRegimeSymbols[symbol] {
 			probSafe, err = ts.mlClient.PredictRegimeDirectional(context.Background(), symbol, direction, regimeFeatures)
 		} else {
 			probSafe, err = ts.mlClient.PredictRegime(context.Background(), symbol, regimeFeatures)
 		}
+		
 		if ts.prom != nil {
 			ts.prom.MLFilterLatency.Observe(time.Since(mlStart).Seconds())
 		}

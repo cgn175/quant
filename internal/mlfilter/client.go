@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -254,6 +255,65 @@ func (c *Client) PredictRegimeDirectional(ctx context.Context, symbol, direction
 		Msg("Directional regime prediction")
 
 	return result.ProbSafe, nil
+}
+
+// RegimeHMMResponse holds the response from /predict_regime_hmm.
+type RegimeHMMResponse struct {
+	Symbol        string    `json:"symbol"`
+	State         int       `json:"state"`          // 0-2 (raw HMM state)
+	Probabilities []float64 `json:"probabilities"`  // [p0, p1, p2]
+	Label         string    `json:"label"`          // "ranging", "trending", "volatile"
+	ModelVersion  string    `json:"model_version"`
+}
+
+// PredictRegimeHMM calls the /predict_regime_hmm endpoint.
+// Returns state, probabilities, and label.
+func (c *Client) PredictRegimeHMM(ctx context.Context, symbol string, features map[string]float64) (*RegimeHMMResponse, error) {
+	if c.cb.IsTripped() {
+		return nil, fmt.Errorf("circuit breaker tripped: ML service disabled")
+	}
+
+	timeout := time.Duration(c.cfg.TimeoutMs) * time.Millisecond
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	reqBody := PredictRequest{
+		Symbol:   symbol,
+		Features: features,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.cfg.URL+"/predict_regime_hmm", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.cb.RecordError()
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.cb.RecordError()
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result RegimeHMMResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		c.cb.RecordError()
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	c.cb.RecordSuccess()
+	return &result, nil
 }
 
 // PredictVolatility calls the volatility predictor (Dynamic Stop-Loss) endpoint.

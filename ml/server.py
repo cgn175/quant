@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""ML inference microservice with three model types.
+"""ML inference microservice with multiple model types.
 
 Endpoints:
-    GET  /health              — health check + loaded models
-    POST /predict             — v1 XGBoost trend filter (legacy)
-    POST /predict_regime      — Regime Classifier (Traffic Light)
-    POST /predict_volatility  — Volatility Predictor (Dynamic Stop-Loss)
+    GET  /health                      — health check + loaded models
+    POST /predict                     — v1 XGBoost trend filter (legacy)
+    POST /predict_regime              — Regime Classifier (Traffic Light)
+    POST /predict_regime_directional  — Directional Regime (LONG/SHORT)
+    POST /predict_regime_hmm          — HMM Regime (probabilistic states)
+    POST /predict_volatility          — Volatility Predictor (Dynamic Stop-Loss)
 """
 
 import argparse
@@ -147,6 +149,77 @@ class SklearnRegistry:
 
 
 # ---------------------------------------------------------------------------
+# HMM Registry (regime detection with state probabilities)
+# ---------------------------------------------------------------------------
+
+class HMMRegistry:
+    """Loads HMM models with scaler and state mapping."""
+    
+    def __init__(self, models_dir: str):
+        self.models: dict[str, object] = {}
+        self.scalers: dict[str, object] = {}
+        self.mappings: dict[str, dict] = {}
+        self._load_all(Path(models_dir))
+    
+    def _load_all(self, models_dir: Path):
+        if not models_dir.exists():
+            print(f"[hmm] Directory not found: {models_dir}", file=sys.stderr)
+            return
+        
+        for model_path in sorted(models_dir.glob("*.pkl")):
+            if "_scaler" in model_path.stem or "_mapping" in model_path.stem:
+                continue
+            
+            symbol = model_path.stem
+            scaler_path = models_dir / f"{symbol}_scaler.pkl"
+            mapping_path = models_dir / f"{symbol}_mapping.pkl"
+            
+            if not scaler_path.exists() or not mapping_path.exists():
+                print(f"[hmm] WARN: missing scaler/mapping for {symbol}", file=sys.stderr)
+                continue
+            
+            self.models[symbol] = joblib.load(str(model_path))
+            self.scalers[symbol] = joblib.load(str(scaler_path))
+            self.mappings[symbol] = joblib.load(str(mapping_path))
+            
+            print(f"[hmm] Loaded: {symbol} (3 states)", file=sys.stderr)
+    
+    @property
+    def symbols(self) -> list[str]:
+        return sorted(self.models.keys())
+    
+    def predict(self, symbol: str, features: dict[str, float]) -> tuple[int, list[float], str]:
+        """Predict HMM state and probabilities.
+        
+        Returns:
+            (state, probabilities, label)
+            state: 0-2 (raw HMM state)
+            probabilities: [p0, p1, p2] for each state
+            label: "ranging", "trending", or "volatile"
+        """
+        # Build feature array (returns, volatility, volume_ratio)
+        required = ["returns", "volatility", "volume_ratio"]
+        missing = [f for f in required if f not in features]
+        if missing:
+            raise ValueError(f"missing features: {missing}")
+        
+        X = np.array([[features[f] for f in required]], dtype=np.float64)
+        
+        # Scale
+        X_scaled = self.scalers[symbol].transform(X)
+        
+        # Predict state and probabilities
+        state = self.models[symbol].predict(X_scaled)[0]
+        probs = self.models[symbol].predict_proba(X_scaled)[0]
+        
+        # Map to label
+        mapping = self.mappings[symbol]
+        label = mapping.get(state, "unknown")
+        
+        return int(state), probs.tolist(), label
+
+
+# ---------------------------------------------------------------------------
 # Global registries
 # ---------------------------------------------------------------------------
 
@@ -154,6 +227,7 @@ xgb_registry: XGBModelRegistry | None = None
 regime_v1_registry: SklearnRegistry | None = None
 regime_v2_registry: SklearnRegistry | None = None
 regime_long_registry: SklearnRegistry | None = None
+regime_hmm_registry: HMMRegistry | None = None
 REGIME_VERSION_MAP: dict[str, str] = {}
 REGIME_DIRECTIONAL_SYMBOLS: set[str] = set()
 vol_registry: SklearnRegistry | None = None
@@ -227,6 +301,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_predict_regime()
         elif self.path == "/predict_regime_directional":
             self._handle_predict_regime_directional()
+        elif self.path == "/predict_regime_hmm":
+            self._handle_predict_regime_hmm()
         elif self.path == "/predict_volatility":
             self._handle_predict_volatility()
         else:
@@ -348,6 +424,47 @@ class Handler(BaseHTTPRequestHandler):
             "model_version": f"regime_v1_{direction.lower()}",
         })
 
+    def _handle_predict_regime_hmm(self):
+        """HMM Regime Classifier — probabilistic state detection."""
+        if not regime_hmm_registry or not regime_hmm_registry.models:
+            self._send_json(503, {"error": "no HMM models loaded"})
+            return
+
+        body = self._read_json()
+        if body is None:
+            return
+
+        symbol = body.get("symbol")
+        if not symbol:
+            self._send_json(400, {"error": "missing 'symbol' field"})
+            return
+
+        if symbol not in regime_hmm_registry.models:
+            self._send_json(404, {"error": f"no HMM model for {symbol}"})
+            return
+
+        features = body.get("features")
+        if not isinstance(features, dict):
+            self._send_json(400, {"error": "missing or invalid 'features' field"})
+            return
+
+        try:
+            state, probs, label = regime_hmm_registry.predict(symbol, features)
+        except ValueError as e:
+            self._send_json(400, {"error": str(e)})
+            return
+        except Exception as e:
+            self._send_json(500, {"error": f"prediction failed: {e}"})
+            return
+
+        self._send_json(200, {
+            "symbol": symbol,
+            "state": state,
+            "probabilities": [round(p, 6) for p in probs],
+            "label": label,
+            "model_version": "regime_hmm_v1",
+        })
+
     def _handle_predict_volatility(self):
         """Volatility Predictor (Dynamic Stop-Loss)."""
         if not vol_registry or not vol_registry.models:
@@ -391,7 +508,7 @@ def main():
 
     models_base = Path(args.models_dir)
 
-    global xgb_registry, regime_v1_registry, regime_v2_registry, regime_long_registry, vol_registry, REGIME_VERSION_MAP, REGIME_DIRECTIONAL_SYMBOLS
+    global xgb_registry, regime_v1_registry, regime_v2_registry, regime_long_registry, regime_hmm_registry, vol_registry, REGIME_VERSION_MAP, REGIME_DIRECTIONAL_SYMBOLS
 
     # Load legacy XGBoost models (trend_v1)
     xgb_registry = XGBModelRegistry(str(models_base))
@@ -402,6 +519,9 @@ def main():
 
     # Load directional regime models (LONG-only)
     regime_long_registry = SklearnRegistry(str(models_base / "regime_v1_long"), name="regime_v1_long")
+
+    # Load HMM regime models
+    regime_hmm_registry = HMMRegistry(str(models_base / "regime_hmm_v1"))
 
     # Per-symbol version map: ETH uses v2, others use v1 (per ML_V2 report)
     REGIME_VERSION_MAP = {
@@ -419,6 +539,7 @@ def main():
         + len(regime_v1_registry.models)
         + len(regime_v2_registry.models)
         + len(regime_long_registry.models)
+        + len(regime_hmm_registry.models if regime_hmm_registry else {})
         + len(vol_registry.models)
     )
 
@@ -432,6 +553,7 @@ def main():
         f"  Regime v1:  {regime_v1_registry.symbols} ({regime_v1_registry.version})\n"
         f"  Regime v2:  {regime_v2_registry.symbols} ({regime_v2_registry.version})\n"
         f"  Regime LONG:{regime_long_registry.symbols} ({regime_long_registry.version})\n"
+        f"  Regime HMM: {regime_hmm_registry.symbols if regime_hmm_registry else []}\n"
         f"  Regime map: {REGIME_VERSION_MAP}\n"
         f"  Vol:        {vol_registry.symbols} ({vol_registry.version})",
         file=sys.stderr,

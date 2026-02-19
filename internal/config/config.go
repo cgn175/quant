@@ -158,6 +158,10 @@ type RegimeFilterConfig struct {
 	SymbolVersions     map[string]string `mapstructure:"symbol_versions"` // per-symbol model version ("v1" or "v2")
 	Ensemble           EnsembleConfig    `mapstructure:"ensemble"`
 	DirectionalSymbols []string          `mapstructure:"directional_symbols"` // symbols using LONG/SHORT models
+	
+	// HMM regime detection (probabilistic states)
+	UseHMM            bool    `mapstructure:"use_hmm"`             // Use HMM instead of RandomForest (default: false)
+	HMMTrendingProb   float64 `mapstructure:"hmm_trending_prob"`   // Min probability for "trending" state (default: 0.6)
 }
 
 // EnsembleConfig holds regime+vol ensemble filter parameters.
