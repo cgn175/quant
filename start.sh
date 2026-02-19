@@ -20,6 +20,9 @@ LOG_MM="logs/bot_mm.log"
 CONFIG_FUNDING="config.funding.yaml"
 LOG_FUNDING="logs/bot_funding.log"
 
+CONFIG_BASIS="config.basis.yaml"
+LOG_BASIS="logs/bot_basis.log"
+
 # Cleanup function
 cleanup() {
     echo "Stopping services..."
@@ -27,6 +30,7 @@ cleanup() {
     if [ -n "$PID_TREND" ]; then kill $PID_TREND 2>/dev/null || true; fi
     if [ -n "$PID_MM" ]; then kill $PID_MM 2>/dev/null || true; fi
     if [ -n "$PID_FUNDING" ]; then kill $PID_FUNDING 2>/dev/null || true; fi
+    if [ -n "$PID_BASIS" ]; then kill $PID_BASIS 2>/dev/null || true; fi
 
     # Kill servers
     if [ -n "$ML_PID" ]; then kill $ML_PID 2>/dev/null || true; fi
@@ -64,7 +68,7 @@ is_bot_running() {
 kill_existing_bots() {
     echo "Checking for existing bot instances..."
     local count=0
-    for config in "$CONFIG_TREND" "$CONFIG_MM" "$CONFIG_FUNDING"; do
+    for config in "$CONFIG_TREND" "$CONFIG_MM" "$CONFIG_FUNDING" "$CONFIG_BASIS"; do
         if [ -n "$config" ]; then
             local pids=$(pgrep -f "bin/bot.*--config.*$config" 2>/dev/null)
             if [ -n "$pids" ]; then
@@ -79,7 +83,7 @@ kill_existing_bots() {
     fi
 }
 
-echo "=== Starting Quant Bot Cluster (Trend, MM, Funding) ==="
+echo "=== Starting Quant Bot Cluster (Trend, MM, Funding, Basis) ==="
 
 # 1. Kill any existing bot instances to prevent duplicates
 kill_existing_bots
@@ -175,9 +179,18 @@ else
     echo "⚠️  Skipping Funding Bot (config not found: $CONFIG_FUNDING)"
 fi
 
+if [ -f "$CONFIG_BASIS" ]; then
+    echo "🚀 Starting Basis Trade Bot..."
+    ./bin/bot --config $CONFIG_BASIS > $LOG_BASIS 2>&1 &
+    PID_BASIS=$!
+    echo "   PID: $PID_BASIS | Log: $LOG_BASIS | Config: $CONFIG_BASIS"
+else
+    echo "⚠️  Skipping Basis Bot (config not found: $CONFIG_BASIS)"
+fi
+
 echo "=== All systems operational ==="
 echo "Press Ctrl+C to stop all services."
 echo "View logs: tail -f logs/bot_*.log"
 
 # Wait for all processes to exit
-wait $PID_TREND $PID_MM $PID_FUNDING $ML_PID $SENTIMENT_PID
+wait $PID_TREND $PID_MM $PID_FUNDING $PID_BASIS $ML_PID $SENTIMENT_PID
