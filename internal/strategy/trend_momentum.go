@@ -14,8 +14,10 @@ type MomentumScore struct {
 	Rank   int
 }
 
-// CalculateMomentumScores calculates volatility-adjusted momentum using provided candles
-func CalculateMomentumScores(symbols []string, candlesMap map[string][]exchange.Candle, lookbackDays int) []MomentumScore {
+// CalculateMomentumScores calculates volatility-adjusted momentum using provided candles.
+// decayFactor controls exponential decay weighting (0 < decay <= 1). When decay == 0 or 1,
+// simple equal-weight returns are used. A value like 0.94 gives ~50% weight reduction at 10 days.
+func CalculateMomentumScores(symbols []string, candlesMap map[string][]exchange.Candle, lookbackDays int, decayFactor float64) []MomentumScore {
 	if lookbackDays == 0 {
 		lookbackDays = 21 // default 3 weeks
 	}
@@ -33,10 +35,8 @@ func CalculateMomentumScores(symbols []string, candlesMap map[string][]exchange.
 		numCandles := lookbackDays * 6 // 4H candles, 6 per day
 		recent := candles[len(candles)-numCandles:]
 
-		// Calculate returns
-		priceStart := recent[0].Close
-		priceEnd := recent[len(recent)-1].Close
-		returns := (priceEnd / priceStart) - 1.0
+		// Calculate weighted returns
+		returns := calcWeightedReturns(recent, decayFactor)
 
 		// Calculate volatility
 		volatility := calculateVolatility(recent)
@@ -61,6 +61,42 @@ func CalculateMomentumScores(symbols []string, candlesMap map[string][]exchange.
 	}
 
 	return scores
+}
+
+// calcWeightedReturns calculates the exponentially decay-weighted cumulative return.
+// Each candle-to-candle return is weighted by decay^(n-1-i) where i=0 is the oldest
+// return and i=n-1 is the newest. Weights are normalized to sum to 1.
+// When decayFactor is 0 or 1, falls back to simple total return.
+func calcWeightedReturns(candles []exchange.Candle, decayFactor float64) float64 {
+	if len(candles) < 2 {
+		return 0.0
+	}
+
+	// Fall back to simple return when decay is disabled
+	if decayFactor <= 0 || decayFactor >= 1 {
+		return (candles[len(candles)-1].Close / candles[0].Close) - 1.0
+	}
+
+	n := len(candles) - 1 // number of returns
+
+	// Compute weights: newest return gets highest weight
+	weights := make([]float64, n)
+	sumW := 0.0
+	for i := 0; i < n; i++ {
+		w := math.Pow(decayFactor, float64(n-1-i))
+		weights[i] = w
+		sumW += w
+	}
+
+	// Weighted sum of per-candle returns
+	weightedReturn := 0.0
+	for i := 0; i < n; i++ {
+		r := (candles[i+1].Close / candles[i].Close) - 1.0
+		weightedReturn += (weights[i] / sumW) * r
+	}
+
+	// Scale by number of returns so the magnitude is comparable to total return
+	return weightedReturn * float64(n)
 }
 
 // calculateVolatility calculates standard deviation of returns
@@ -104,6 +140,7 @@ func (ts *TrendStrategy) IsTopMomentum(symbol string, symbols []string, candlesM
 		symbols,
 		candlesMap,
 		ts.config.MomentumFilter.LookbackDays,
+		ts.config.MomentumFilter.DecayFactor,
 	)
 
 	topPct := ts.config.MomentumFilter.TopPct
@@ -132,6 +169,7 @@ func (ts *TrendStrategy) GetMomentumRank(symbol string, symbols []string, candle
 		symbols,
 		candlesMap,
 		ts.config.MomentumFilter.LookbackDays,
+		ts.config.MomentumFilter.DecayFactor,
 	)
 
 	for _, s := range scores {

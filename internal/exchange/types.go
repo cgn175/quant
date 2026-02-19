@@ -61,13 +61,15 @@ type ExchangeRates struct {
 
 // CrossExchangeOpportunity represents an arbitrage opportunity
 type CrossExchangeOpportunity struct {
-	Symbol           string
-	HighExchange     string
-	LowExchange      string
-	HighFundingRate  float64
-	LowFundingRate   float64
-	SpreadBps        float64 // Spread in basis points
-	AnnualizedReturn float64 // Expected annualized return %
+	Symbol              string
+	HighExchange        string
+	LowExchange         string
+	HighFundingRate     float64
+	LowFundingRate      float64
+	SpreadBps           float64 // Spread in basis points
+	AnnualizedReturn    float64 // Expected annualized return %
+	EstTransferCostBps  float64 // Estimated round-trip transfer cost in bps
+	NetAnnualizedReturn float64 // Return after estimated transfer costs
 }
 
 // FundingRateInfo represents a funding rate from the exchange.

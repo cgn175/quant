@@ -40,7 +40,7 @@ func TestCalculateMomentumScores(t *testing.T) {
 	}
 	candlesMap["SOLUSDT"] = solCandles
 	
-	scores := CalculateMomentumScores(symbols, candlesMap, 21)
+	scores := CalculateMomentumScores(symbols, candlesMap, 21, 0.94)
 	
 	// Verify we got 3 scores
 	assert.Equal(t, 3, len(scores))
@@ -115,7 +115,7 @@ func TestIsTopMomentum(t *testing.T) {
 	}
 	
 	// Top 50% should be top 2 symbols (whichever they are)
-	scores := CalculateMomentumScores(symbols, candlesMap, 21)
+	scores := CalculateMomentumScores(symbols, candlesMap, 21, 0.94)
 	top1 := scores[0].Symbol
 	top2 := scores[1].Symbol
 	bottom1 := scores[2].Symbol

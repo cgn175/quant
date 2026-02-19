@@ -21,20 +21,20 @@ type LiquidationSignal struct {
 	Timestamp       time.Time
 }
 
+// LiquidationDataClient provides market data for liquidation detection.
+type LiquidationDataClient interface {
+	GetFundingRate(symbol string) (*exchange.FundingRateInfo, error)
+	GetPerpPrice(symbol string) (float64, error)
+}
+
 // LiquidationStrategy detects liquidation cascade opportunities
 type LiquidationStrategy struct {
 	cfg    config.LiquidationConfig
 	db     *sql.DB
-	client interface {
-		GetFundingRate(symbol string) (*exchange.FundingRateInfo, error)
-		GetPerpPrice(symbol string) (float64, error)
-	}
+	client LiquidationDataClient
 }
 
-func NewLiquidationStrategy(cfg config.LiquidationConfig, db *sql.DB, client interface {
-	GetFundingRate(symbol string) (*exchange.FundingRateInfo, error)
-	GetPerpPrice(symbol string) (float64, error)
-}) *LiquidationStrategy {
+func NewLiquidationStrategy(cfg config.LiquidationConfig, db *sql.DB, client LiquidationDataClient) *LiquidationStrategy {
 	return &LiquidationStrategy{
 		cfg:    cfg,
 		db:     db,
@@ -144,9 +144,3 @@ func (ls *LiquidationStrategy) getOIChange(symbol string, period time.Duration) 
 	return ((newOI - oldOI) / oldOI) * 100, nil
 }
 
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}

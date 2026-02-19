@@ -32,6 +32,16 @@ strategy:
     momentum_exit_enable: false # Exit on momentum reversal (default: false)
                                 #   - Exit when current < avg_24h (momentum lost)
 
+    # Cross-exchange arbitrage (multi-exchange funding spread capture)
+    # WARNING: Requires PRE-FUNDED accounts on all target exchanges.
+    # Do NOT rely on transferring funds during arb — withdrawal fees and
+    # 10-30min delays will eliminate profit. Ensure adequate balance on
+    # each exchange before enabling.
+    # cross_exchange:
+    #   enabled: false
+    #   exchanges: [binance, bybit, okx]
+    #   min_spread_bps: 5.0
+
 execution:
   slippage_bp: 5
   fee_percent: 0.04

@@ -154,6 +154,7 @@ type MomentumFilterConfig struct {
 	Enabled      bool    `mapstructure:"enabled"`       // Enable momentum filter (default: false)
 	LookbackDays int     `mapstructure:"lookback_days"` // Lookback period in days (default: 21 = 3 weeks)
 	TopPct       float64 `mapstructure:"top_pct"`       // Trade only top N% by momentum (default: 0.5 = 50%)
+	DecayFactor  float64 `mapstructure:"decay_factor"`  // Exponential decay factor for weighting recent returns (default: 0.94)
 }
 
 
@@ -541,6 +542,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.momentum_filter.enabled", false)
 	v.SetDefault("strategy.momentum_filter.lookback_days", 21)
 	v.SetDefault("strategy.momentum_filter.top_pct", 0.5)
+	v.SetDefault("strategy.momentum_filter.decay_factor", 0.94)
 
 	// Storage defaults
 	v.SetDefault("storage.candle_db_path", "candles.db")

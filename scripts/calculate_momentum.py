@@ -11,6 +11,7 @@ from pathlib import Path
 DATA_DIR = Path("data_4h")
 SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT"]
 LOOKBACK_DAYS = 21
+DECAY_FACTOR = 0.94  # Exponential decay: ~50% weight reduction at 10 days
 
 
 def load_data(symbol: str) -> pd.DataFrame:
@@ -23,12 +24,13 @@ def load_data(symbol: str) -> pd.DataFrame:
     return df.sort_values('timestamp').reset_index(drop=True)
 
 
-def calculate_momentum(df: pd.DataFrame, lookback_days: int = LOOKBACK_DAYS) -> float:
-    """Calculate volatility-adjusted momentum score.
+def calculate_momentum(df: pd.DataFrame, lookback_days: int = LOOKBACK_DAYS, decay_factor: float = DECAY_FACTOR) -> float:
+    """Calculate volatility-adjusted momentum score with exponential decay weighting.
     
-    Formula: returns / volatility
-    - returns: (price_now / price_21d_ago) - 1
+    Formula: weighted_returns / volatility
+    - weighted_returns: sum of decay-weighted per-bar returns (recent bars weighted higher)
     - volatility: std(daily_returns_21d)
+    - decay_factor: weight_i = decay^(n-1-i), normalized to sum to 1
     """
     if len(df) < lookback_days:
         return 0.0
@@ -36,20 +38,34 @@ def calculate_momentum(df: pd.DataFrame, lookback_days: int = LOOKBACK_DAYS) -> 
     # Get last N days
     recent = df.tail(lookback_days)
     
-    # Calculate returns
-    price_start = recent.iloc[0]['close']
-    price_end = recent.iloc[-1]['close']
-    returns = (price_end / price_start) - 1
+    # Calculate per-bar returns
+    daily_returns = recent['close'].pct_change().dropna()
+    
+    if len(daily_returns) == 0:
+        return 0.0
     
     # Calculate volatility (std of daily returns)
-    daily_returns = recent['close'].pct_change().dropna()
     volatility = daily_returns.std()
     
     if volatility == 0:
         return 0.0
     
+    # Calculate exponentially decay-weighted returns
+    n = len(daily_returns)
+    if 0 < decay_factor < 1:
+        # weight_i = decay^(n-1-i): oldest gets smallest weight, newest gets weight=1
+        indices = np.arange(n)
+        weights = np.power(decay_factor, n - 1 - indices)
+        weights /= weights.sum()  # normalize
+        weighted_return = float(np.dot(weights, daily_returns.values)) * n
+    else:
+        # decay disabled: simple total return
+        price_start = recent.iloc[0]['close']
+        price_end = recent.iloc[-1]['close']
+        weighted_return = (price_end / price_start) - 1
+    
     # Volatility-adjusted momentum
-    momentum_score = returns / volatility
+    momentum_score = weighted_return / volatility
     
     return momentum_score
 
@@ -86,7 +102,7 @@ def main():
     
     results = calculate_all_momentum()
     
-    print("Momentum Scores (21-day volatility-adjusted):")
+    print(f"Momentum Scores (21-day volatility-adjusted, decay={DECAY_FACTOR}):")
     print()
     print(results.to_string(index=False))
     print()

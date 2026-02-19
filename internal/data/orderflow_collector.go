@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -81,11 +82,16 @@ func createOrderFlowTables(db *sql.DB) error {
 }
 
 func (ofc *OrderFlowCollector) Start() error {
+	ofc.mu.Lock()
 	for _, symbol := range ofc.symbols {
 		ofc.deltas[symbol] = &DeltaState{}
+	}
+	ofc.mu.Unlock()
+
+	for _, symbol := range ofc.symbols {
 		go ofc.startTradeStream(symbol)
 	}
-	
+
 	go ofc.persistLoop()
 	return nil
 }
@@ -235,7 +241,7 @@ func (ofc *OrderFlowCollector) persist(windowSize int) {
 		_, err := ofc.db.Exec(`
 			INSERT INTO order_flow (timestamp, symbol, window_size, delta, cvd, volume)
 			VALUES (?, ?, ?, ?, ?, ?)
-		`, now, symbol, windowSize, delta, state.cvd, abs(delta))
+		`, now, symbol, windowSize, delta, state.cvd, math.Abs(delta))
 
 		if err != nil {
 			log.Error().Err(err).Str("symbol", symbol).Msg("failed to persist order flow")
@@ -248,9 +254,3 @@ func (ofc *OrderFlowCollector) Stop() error {
 	return ofc.db.Close()
 }
 
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}

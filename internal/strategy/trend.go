@@ -120,6 +120,7 @@ type MomentumFilterConfig struct {
 	Enabled      bool    // Enable momentum filter
 	LookbackDays int     // Lookback period in days (default: 21 = 3 weeks)
 	TopPct       float64 // Trade only top N% by momentum (default: 0.5 = 50%)
+	DecayFactor  float64 // Exponential decay factor for weighting recent returns (default: 0.94)
 }
 
 
