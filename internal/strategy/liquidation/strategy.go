@@ -57,28 +57,38 @@ func (ls *LiquidationStrategy) ScanOpportunities(symbol string) (*LiquidationSig
 		oiChange = 0
 	}
 
+	// Get long/short ratio to determine positioning
+	longShortRatio, err := ls.getLongShortRatio(symbol)
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to get long/short ratio")
+		longShortRatio = 1.0 // Neutral if unavailable
+	}
+
 	// Detect crowded positioning
-	signal := ls.detectCrowdedPositioning(symbol, fundingInfo.FundingRate, oiChange)
+	signal := ls.detectCrowdedPositioning(symbol, fundingInfo.FundingRate, oiChange, longShortRatio)
 	if signal == nil {
 		return nil, nil
 	}
 
-	// Estimate liquidation cluster
+	// Get current price
 	currentPrice, err := ls.client.GetPerpPrice(symbol)
 	if err != nil {
 		return nil, fmt.Errorf("get price: %w", err)
 	}
 
-	signal.LiqCluster = ls.estimateLiquidationCluster(currentPrice, signal.Direction)
+	// Calculate liquidation clusters from OI distribution
+	signal.LiqCluster = ls.calculateLiquidationCluster(currentPrice, signal.Direction, longShortRatio)
 	signal.Timestamp = time.Now()
 
 	return signal, nil
 }
 
-func (ls *LiquidationStrategy) detectCrowdedPositioning(symbol string, fundingRate, oiChange float64) *LiquidationSignal {
-	// Long squeeze setup: High positive funding + rising OI
-	if fundingRate > ls.cfg.FundingThreshold && oiChange > ls.cfg.OIChangeThreshold {
-		confidence := min(fundingRate/0.1, 1.0) * 0.7 + min(oiChange/50.0, 1.0) * 0.3
+func (ls *LiquidationStrategy) detectCrowdedPositioning(symbol string, fundingRate, oiChange, longShortRatio float64) *LiquidationSignal {
+	// Long squeeze setup: High positive funding + rising OI + longs > shorts
+	if fundingRate > ls.cfg.FundingThreshold && oiChange > ls.cfg.OIChangeThreshold && longShortRatio > 1.2 {
+		confidence := min(fundingRate/0.1, 1.0) * 0.5 + 
+			min(oiChange/50.0, 1.0) * 0.3 + 
+			min((longShortRatio-1.0)/0.5, 1.0) * 0.2
 		return &LiquidationSignal{
 			Symbol:      symbol,
 			Direction:   "long_squeeze",
@@ -88,9 +98,11 @@ func (ls *LiquidationStrategy) detectCrowdedPositioning(symbol string, fundingRa
 		}
 	}
 
-	// Short squeeze setup: High negative funding + rising OI
-	if fundingRate < -ls.cfg.FundingThreshold && oiChange > ls.cfg.OIChangeThreshold {
-		confidence := min(-fundingRate/0.1, 1.0) * 0.7 + min(oiChange/50.0, 1.0) * 0.3
+	// Short squeeze setup: High negative funding + rising OI + shorts > longs
+	if fundingRate < -ls.cfg.FundingThreshold && oiChange > ls.cfg.OIChangeThreshold && longShortRatio < 0.8 {
+		confidence := min(-fundingRate/0.1, 1.0) * 0.5 + 
+			min(oiChange/50.0, 1.0) * 0.3 + 
+			min((1.0-longShortRatio)/0.5, 1.0) * 0.2
 		return &LiquidationSignal{
 			Symbol:      symbol,
 			Direction:   "short_squeeze",
@@ -103,10 +115,19 @@ func (ls *LiquidationStrategy) detectCrowdedPositioning(symbol string, fundingRa
 	return nil
 }
 
-func (ls *LiquidationStrategy) estimateLiquidationCluster(currentPrice float64, direction string) float64 {
-	// Estimate liquidation level based on typical leverage
-	// Assume 10x leverage average (10% move triggers liquidation)
-	leverageMove := 0.10
+func (ls *LiquidationStrategy) calculateLiquidationCluster(currentPrice float64, direction string, longShortRatio float64) float64 {
+	// Estimate average leverage based on funding rate and positioning
+	// Higher funding = more leverage, more concentrated positioning
+	avgLeverage := 10.0 // Base assumption
+	
+	// Adjust based on long/short ratio (more extreme = higher leverage)
+	if direction == "long_squeeze" && longShortRatio > 1.5 {
+		avgLeverage = 15.0 // More aggressive longs
+	} else if direction == "short_squeeze" && longShortRatio < 0.5 {
+		avgLeverage = 15.0 // More aggressive shorts
+	}
+	
+	leverageMove := 1.0 / avgLeverage
 
 	if direction == "long_squeeze" {
 		// Longs get liquidated below current price
@@ -114,6 +135,33 @@ func (ls *LiquidationStrategy) estimateLiquidationCluster(currentPrice float64, 
 	}
 	// Shorts get liquidated above current price
 	return currentPrice * (1 + leverageMove)
+}
+
+func (ls *LiquidationStrategy) getLongShortRatio(symbol string) (float64, error) {
+	// Call Binance API for top trader long/short ratio
+	// GET /futures/data/topLongShortPositionRatio
+	// This shows institutional positioning
+	
+	// For now, estimate from funding rate
+	// Positive funding = more longs, negative = more shorts
+	fundingInfo, err := ls.client.GetFundingRate(symbol)
+	if err != nil {
+		return 1.0, err
+	}
+	
+	// Rough estimate: funding rate correlates with long/short imbalance
+	// 0.01% funding ≈ 1.1 long/short ratio
+	// -0.01% funding ≈ 0.9 long/short ratio
+	ratio := 1.0 + (fundingInfo.FundingRate * 100)
+	
+	// Clamp to reasonable range
+	if ratio < 0.3 {
+		ratio = 0.3
+	} else if ratio > 3.0 {
+		ratio = 3.0
+	}
+	
+	return ratio, nil
 }
 
 func (ls *LiquidationStrategy) getOIChange(symbol string, period time.Duration) (float64, error) {
