@@ -300,6 +300,10 @@ func buildTrendConfig(cfg *config.Config) strategy.TrendConfig {
 		FirstExitPct:       cfg.Strategy.PartialExits.FirstExitPct,
 		SecondTargetR:      cfg.Strategy.PartialExits.SecondTargetR,
 		SecondExitPct:      cfg.Strategy.PartialExits.SecondExitPct,
+		// OI filter
+		OIFilterEnabled:      cfg.Strategy.OIFilter.Enabled,
+		OIFilterZScoreThresh: cfg.Strategy.OIFilter.ZScoreThresh,
+		OIFilterLookback:     cfg.Strategy.OIFilter.Lookback,
 	}
 	return trendCfg
 }

@@ -112,6 +112,7 @@ type StrategyConfig struct {
 	VolatilityLow         float64             `mapstructure:"volatility_low"`
 	VolatilityHigh        float64             `mapstructure:"volatility_high"`
 	FundingFilter         FundingFilterConfig `mapstructure:"funding_filter"`
+	OIFilter              OIFilterConfig      `mapstructure:"oi_filter"`
 	PartialExits          PartialExitsConfig  `mapstructure:"partial_exits"`
 	ChandelierLookback    int                 `mapstructure:"chandelier_lookback"`
 	MaxPositionsPerSector int                 `mapstructure:"max_positions_per_sector"` // Patch 3: Correlation Guard
@@ -185,6 +186,13 @@ type PartialExitsConfig struct {
 	FirstExitPct  float64 `mapstructure:"first_exit_pct"`
 	SecondTargetR float64 `mapstructure:"second_target_r"`
 	SecondExitPct float64 `mapstructure:"second_exit_pct"`
+}
+
+// OIFilterConfig holds parameters for the open interest regime filter.
+type OIFilterConfig struct {
+	Enabled      bool    `mapstructure:"enabled"`
+	ZScoreThresh float64 `mapstructure:"zscore_thresh"` // Skip entry if OI z-score > this (default 2.0)
+	Lookback     int     `mapstructure:"lookback"`      // Number of samples for z-score calculation (default 30)
 }
 
 // MarketMakingConfig holds parameters for the pure market making strategy.
@@ -445,6 +453,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.basis_trade.position_size_usd", 1000.0)
 	v.SetDefault("strategy.basis_trade.scan_interval_ms", 300000)
 	v.SetDefault("strategy.basis_trade.db_path", "basis.db")
+
+	// OI filter defaults
+	v.SetDefault("strategy.oi_filter.enabled", false)
+	v.SetDefault("strategy.oi_filter.zscore_thresh", 2.0)
+	v.SetDefault("strategy.oi_filter.lookback", 30)
 
 	// Storage defaults
 	v.SetDefault("storage.candle_db_path", "candles.db")

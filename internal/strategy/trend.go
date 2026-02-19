@@ -101,6 +101,11 @@ type TrendConfig struct {
 	// Time-based exit for dead positions
 	TimeStopBars int     // 10 — exit if position hasn't moved 0.5R after N bars
 	TimeStopMinR float64 // 0.5 — minimum R required to avoid time stop
+
+	// Open Interest regime filter
+	OIFilterEnabled      bool
+	OIFilterZScoreThresh float64 // z-score threshold for blocking entry (e.g., 2.0)
+	OIFilterLookback     int     // number of OI samples for z-score calculation (e.g., 30)
 }
 
 // SectorMap classifies trading symbols by sector for correlation management (Patch 3).
@@ -263,6 +268,9 @@ type TrendStrategy struct {
 	// Portfolio drawdown circuit breaker
 	peakEquity        float64
 	drawdownHaltUntil time.Time
+
+	// OI filter history (per symbol)
+	oiHistory map[string][]float64
 }
 
 // TrendStrategyOption configures optional dependencies for TrendStrategy.
@@ -291,6 +299,7 @@ func NewTrendStrategy(config TrendConfig, mlClient ...*mlfilter.Client) *TrendSt
 		config:         config,
 		positions:      make(map[string]*TrendPosition),
 		dailyResetDate: time.Now().UTC().Truncate(24 * time.Hour),
+		oiHistory:      make(map[string][]float64),
 	}
 	if len(mlClient) > 0 {
 		ts.mlClient = mlClient[0]
@@ -304,6 +313,7 @@ func NewTrendStrategyWithOpts(config TrendConfig, opts ...TrendStrategyOption) *
 		config:         config,
 		positions:      make(map[string]*TrendPosition),
 		dailyResetDate: time.Now().UTC().Truncate(24 * time.Hour),
+		oiHistory:      make(map[string][]float64),
 	}
 	for _, opt := range opts {
 		opt(ts)
@@ -787,6 +797,7 @@ func (ts *TrendStrategy) OnBar(
 
 	// 2c. Funding rate filter
 	sizeMultiplier := 1.0
+	isFundingElevated := false
 	if fundingCache != nil {
 		if longSignal && fundingCache.IsLongCrowded(symbol, cfg.FundingExtreme) {
 			log.Debug().Str("symbol", symbol).Msg("funding filter blocked LONG (extreme)")
@@ -797,6 +808,21 @@ func (ts *TrendStrategy) OnBar(
 			return nil
 		}
 		sizeMultiplier = fundingCache.SizeMultiplier(symbol, cfg.FundingElevated)
+		isFundingElevated = sizeMultiplier < 1.0
+	}
+
+	// 2d. Open Interest regime filter
+	// Skip entry when OI z-score is extreme AND funding is elevated
+	if cfg.OIFilterEnabled && isFundingElevated {
+		oiZScore := ts.getOIZScore(symbol)
+		if oiZScore > cfg.OIFilterZScoreThresh {
+			log.Debug().
+				Str("symbol", symbol).
+				Float64("oi_zscore", oiZScore).
+				Float64("threshold", cfg.OIFilterZScoreThresh).
+				Msg("OI filter blocked entry (extreme OI + elevated funding)")
+			return nil
+		}
 	}
 
 	// ---------------------------------------------------------------
@@ -1314,4 +1340,62 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// UpdateOIHistory adds an OI value to the history for a symbol.
+// Call this periodically (e.g., each scan) to build up the z-score calculation.
+func (ts *TrendStrategy) UpdateOIHistory(symbol string, oi float64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.oiHistory == nil {
+		ts.oiHistory = make(map[string][]float64)
+	}
+
+	history := ts.oiHistory[symbol]
+	history = append(history, oi)
+
+	// Keep only the last N samples
+	lookback := ts.config.OIFilterLookback
+	if lookback <= 0 {
+		lookback = 30
+	}
+	if len(history) > lookback {
+		history = history[len(history)-lookback:]
+	}
+
+	ts.oiHistory[symbol] = history
+}
+
+// getOIZScore calculates the z-score of the latest OI vs historical mean/stddev.
+// Returns 0 if insufficient data.
+func (ts *TrendStrategy) getOIZScore(symbol string) float64 {
+	// Note: ts.mu should already be locked by caller, or we can lock here for safety
+	history := ts.oiHistory[symbol]
+	n := len(history)
+	if n < 5 {
+		return 0 // not enough data
+	}
+
+	// Mean
+	var sum float64
+	for _, v := range history {
+		sum += v
+	}
+	mean := sum / float64(n)
+
+	// Stddev
+	var sumSq float64
+	for _, v := range history {
+		diff := v - mean
+		sumSq += diff * diff
+	}
+	stddev := math.Sqrt(sumSq / float64(n))
+
+	if stddev == 0 {
+		return 0
+	}
+
+	latest := history[n-1]
+	return (latest - mean) / stddev
 }
