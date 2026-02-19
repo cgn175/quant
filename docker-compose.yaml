@@ -43,15 +43,6 @@ services:
     depends_on:
       - prometheus
 
-  wshub:
-    build:
-      context: .
-      dockerfile: Dockerfile.wshub
-    container_name: quant-wshub
-    restart: unless-stopped
-    ports:
-      - "9089:9090"
-
 volumes:
   redis_data:
   prometheus_data:
