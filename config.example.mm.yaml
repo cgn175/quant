@@ -13,13 +13,36 @@ symbols:
 strategy:
   type: market_making
   market_making:
-    spread_pct: 0.001 # 0.1%
-    order_amount: 0.001
-    refresh_time_ms: 1000 # 1s for quick test
+    # Core market making parameters
+    spread_pct: 0.001            # Base spread from mid-price (0.1%)
+    order_amount: 0.001          # Size of bid/ask orders in base asset
+    refresh_time_ms: 1000        # Order refresh interval in ms (1s for quick test)
+    
+    # Inventory risk management (Avellaneda-Stoikov)
+    gamma: 0.1                   # Risk aversion parameter (higher = more aggressive skew)
+    max_inventory: 1.0           # Max absolute inventory before halting one side
+    
+    # Dynamic spread adjustment
+    min_spread_pct: 0.001        # Minimum spread floor (0.1%)
+    max_spread_pct: 0.02         # Maximum spread ceiling (2%)
+    vol_lookback: 20             # Rolling window for volatility calculation
+    
+    # Volatility regime filter - protects against adverse selection during volatility spikes
+    # Uses BTC and ETH as market-wide volatility proxies
+    vol_regime_enabled: true       # Enable volatility regime detection (default: true)
+    vol_regime_atr_period: 14      # ATR period for regime calculation (default: 14)
+    vol_calm_threshold: 0.02       # ATR% threshold for calm regime (default: 2%)
+                                   #   - Normal quoting, tight spreads
+    vol_elevated_threshold: 0.05   # ATR% threshold for elevated regime (default: 5%)
+                                   #   - Wider spreads (vol_spread_multiplier x)
+    vol_extreme_threshold: 0.10    # ATR% threshold for extreme regime (default: 10%)
+                                   #   - HALT all quoting immediately
+    vol_spread_multiplier: 3.0     # Spread multiplier in elevated volatility (default: 3x)
+                                   #   - Applied when regime is VolElevated
 
 execution:
   slippage_bp: 0
   fee_percent: 0.04
 
 monitoring:
-  prometheus_port: 9091 # different port to avoid conflict
+  prometheus_port: 9091          # Different port to avoid conflict with main bot

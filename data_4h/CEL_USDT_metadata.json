@@ -1,0 +1,14 @@
+{
+  "symbol": "CEL/USDT",
+  "name": "Celsius Network",
+  "is_dead_coin": true,
+  "peak_price": 8.02,
+  "peak_date": "2021-06-04T00:00:00",
+  "crash_start": "2022-06-10T00:00:00",
+  "crash_end": "2022-07-14T00:00:00",
+  "final_price": 0.1,
+  "crash_reason": "Celsius platform collapse",
+  "total_return_during_crash": -0.987,
+  "delisting_date": "2022-07-14T00:00:00",
+  "data_source": "binance"
+}

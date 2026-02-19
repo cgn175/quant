@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-02-19T02:43:21.406332",
+  "survivor_symbols": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "BNB/USDT",
+    "ADA/USDT",
+    "AVAX/USDT",
+    "FET/USDT",
+    "NEAR/USDT",
+    "EGLD/USDT"
+  ],
+  "dead_symbols": [
+    "LUNA/USDT",
+    "FTT/USDT",
+    "CEL/USDT",
+    "VGX/USDT",
+    "ANC/USDT",
+    "MIR/USDT",
+    "IRIS/USDT"
+  ],
+  "survivors_result": {
+    "universe": "survivors",
+    "total_trades": 135,
+    "win_rate": 0.42,
+    "profit_factor": 1.35,
+    "gross_pnl": 3850.0000000000005,
+    "net_pnl": 3500,
+    "max_drawdown": 0.25,
+    "sharpe_ratio": 0.85,
+    "sortino_ratio": 1.02,
+    "calmar_ratio": 1.4,
+    "cagr": 0.0875,
+    "delisted_trades": 0,
+    "delisted_symbols": []
+  },
+  "full_result": {
+    "universe": "full",
+    "total_trades": 240,
+    "win_rate": 0.364875,
+    "profit_factor": 1.11375,
+    "gross_pnl": -2310.0,
+    "net_pnl": -2100,
+    "max_drawdown": 0.4140625,
+    "sharpe_ratio": 0.6268750000000001,
+    "sortino_ratio": 0.7522500000000001,
+    "calmar_ratio": -0.5071698113207547,
+    "cagr": -0.0525,
+    "delisted_trades": 21,
+    "delisted_symbols": [
+      "LUNA/USDT",
+      "FTT/USDT",
+      "CEL/USDT",
+      "VGX/USDT",
+      "ANC/USDT",
+      "MIR/USDT",
+      "IRIS/USDT"
+    ]
+  },
+  "bias_metrics": {
+    "sharpe_bias_pct": 35.59322033898303,
+    "return_bias_pct": 266.66666666666663,
+    "win_rate_bias_pct": 15.107913669064743,
+    "profit_factor_bias_pct": 21.212121212121218,
+    "drawdown_bias_pct": 65.625
+  }
+}

@@ -217,6 +217,14 @@ type MarketMakingConfig struct {
 	MinSpreadPct float64 `mapstructure:"min_spread_pct"` // Floor for dynamic spread
 	MaxSpreadPct float64 `mapstructure:"max_spread_pct"` // Ceiling for dynamic spread
 	VolLookback  int     `mapstructure:"vol_lookback"`   // Rolling window for volatility calculation
+
+	// Volatility regime filter (protects against adverse selection during volatility spikes)
+	VolRegimeEnabled     bool    `mapstructure:"vol_regime_enabled"`      // Enable volatility regime detection (default: true)
+	VolRegimeATRPeriod   int     `mapstructure:"vol_regime_atr_period"`   // ATR period for regime calculation (default: 14)
+	VolCalmThreshold     float64 `mapstructure:"vol_calm_threshold"`      // ATR% threshold for calm regime (default: 0.02 = 2%)
+	VolElevatedThreshold float64 `mapstructure:"vol_elevated_threshold"`  // ATR% threshold for elevated regime (default: 0.05 = 5%)
+	VolExtremeThreshold  float64 `mapstructure:"vol_extreme_threshold"`   // ATR% threshold for extreme regime (default: 0.10 = 10%)
+	VolSpreadMultiplier  float64 `mapstructure:"vol_spread_multiplier"`   // Spread multiplier in elevated volatility (default: 3.0 = 3x)
 }
 
 // FundingArbConfig holds parameters for the funding rate arbitrage strategy.
@@ -443,6 +451,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.market_making.min_spread_pct", 0.001)  // 0.1% floor
 	v.SetDefault("strategy.market_making.max_spread_pct", 0.02)   // 2% ceiling
 	v.SetDefault("strategy.market_making.vol_lookback", 20)       // 20-tick rolling window
+
+	// Volatility regime filter defaults
+	v.SetDefault("strategy.market_making.vol_regime_enabled", true)       // enabled by default
+	v.SetDefault("strategy.market_making.vol_regime_atr_period", 14)      // 14-period ATR
+	v.SetDefault("strategy.market_making.vol_calm_threshold", 0.02)       // 2% ATR
+	v.SetDefault("strategy.market_making.vol_elevated_threshold", 0.05)   // 5% ATR
+	v.SetDefault("strategy.market_making.vol_extreme_threshold", 0.10)    // 10% ATR
+	v.SetDefault("strategy.market_making.vol_spread_multiplier", 3.0)     // 3x spread in elevated vol
 
 	// Funding arb defaults
 	v.SetDefault("strategy.funding_arb.min_funding_rate", 0.0005) // 0.05% per 8h

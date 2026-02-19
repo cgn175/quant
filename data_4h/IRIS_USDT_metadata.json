@@ -1,0 +1,14 @@
+{
+  "symbol": "IRIS/USDT",
+  "name": "IRISnet",
+  "is_dead_coin": true,
+  "peak_price": 0.39,
+  "peak_date": "2021-04-12T00:00:00",
+  "crash_start": "2022-05-01T00:00:00",
+  "crash_end": "2023-01-01T00:00:00",
+  "final_price": 0.002,
+  "crash_reason": "Gradual decline/delisting",
+  "total_return_during_crash": -0.995,
+  "delisting_date": "2023-01-01T00:00:00",
+  "data_source": "binance"
+}

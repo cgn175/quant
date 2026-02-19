@@ -1,0 +1,14 @@
+{
+  "symbol": "LUNA/USDT",
+  "name": "Terra Luna (Classic)",
+  "is_dead_coin": true,
+  "peak_price": 119.51,
+  "peak_date": "2022-04-05T00:00:00",
+  "crash_start": "2022-05-09T00:00:00",
+  "crash_end": "2022-05-13T00:00:00",
+  "final_price": 0.0001,
+  "crash_reason": "Death spiral / UST depeg",
+  "total_return_during_crash": -0.999999,
+  "delisting_date": "2022-05-13T00:00:00",
+  "data_source": "binance"
+}

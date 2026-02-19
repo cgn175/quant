@@ -14,6 +14,10 @@ type Metrics struct {
 	DailyPnL      prometheus.Gauge
 	MaxDrawdown   prometheus.Gauge
 
+	// Market Making metrics
+	MMVolatilityRegime *prometheus.GaugeVec // label: regime (calm, normal, elevated, extreme)
+	MMQuotesHaltedTotal prometheus.Counter   // total times quoting halted due to extreme vol
+
 	// Position metrics
 	OpenPositions    prometheus.Gauge
 	MaxOpenPositions prometheus.Gauge
@@ -222,5 +226,15 @@ func NewMetrics() *Metrics {
 			Name: "portfolio_entries_blocked_total",
 			Help: "Entries blocked by portfolio monitor per symbol and reason",
 		}, []string{"symbol", "reason"}),
+
+		// Market Making metrics
+		MMVolatilityRegime: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "mm_volatility_regime",
+			Help: "Current volatility regime for market making (1 = active, 0 = inactive)",
+		}, []string{"regime"}),
+		MMQuotesHaltedTotal: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "mm_quotes_halted_total",
+			Help: "Total times market making quotes were halted due to extreme volatility",
+		}),
 	}
 }

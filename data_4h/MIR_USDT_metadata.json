@@ -1,0 +1,14 @@
+{
+  "symbol": "MIR/USDT",
+  "name": "Mirror Protocol",
+  "is_dead_coin": true,
+  "peak_price": 12.9,
+  "peak_date": "2021-04-10T00:00:00",
+  "crash_start": "2022-05-09T00:00:00",
+  "crash_end": "2022-06-01T00:00:00",
+  "final_price": 0.03,
+  "crash_reason": "Terra ecosystem collapse",
+  "total_return_during_crash": -0.998,
+  "delisting_date": "2022-06-01T00:00:00",
+  "data_source": "binance"
+}

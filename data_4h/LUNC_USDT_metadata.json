@@ -1,0 +1,14 @@
+{
+  "symbol": "LUNC/USDT",
+  "name": "Terra Classic (post-crash)",
+  "is_dead_coin": true,
+  "peak_price": 0.0005,
+  "peak_date": "2022-05-13T00:00:00",
+  "crash_start": "2022-05-13T00:00:00",
+  "crash_end": "2022-05-31T00:00:00",
+  "final_price": 1e-05,
+  "crash_reason": "LUNA 2.0 fork, old LUNA becomes LUNC",
+  "total_return_during_crash": -0.98,
+  "delisting_date": "2022-05-31T00:00:00",
+  "data_source": "binance"
+}

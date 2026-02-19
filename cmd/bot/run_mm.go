@@ -74,7 +74,7 @@ func runMarketMaking(cmd *cobra.Command, cfg *config.Config) error {
 	}()
 
 	// Strategy
-	strat := marketmaking.NewStrategy(cfg.Strategy.MarketMaking, exchangeClient, executor, execEngine, cfg.Symbols)
+	strat := marketmaking.NewStrategy(cfg.Strategy.MarketMaking, exchangeClient, executor, execEngine, cfg.Symbols, prom)
 
 	// Block until context cancelled
 	if err := strat.Start(ctx); err != nil {

@@ -1,0 +1,14 @@
+{
+  "symbol": "VGX/USDT",
+  "name": "Voyager Token",
+  "is_dead_coin": true,
+  "peak_price": 7.5,
+  "peak_date": "2021-01-05T00:00:00",
+  "crash_start": "2022-06-27T00:00:00",
+  "crash_end": "2022-07-06T00:00:00",
+  "final_price": 0.02,
+  "crash_reason": "Voyager bankruptcy",
+  "total_return_during_crash": -0.997,
+  "delisting_date": "2022-07-06T00:00:00",
+  "data_source": "binance"
+}

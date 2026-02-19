@@ -70,6 +70,9 @@ type Engine struct {
 	// Optional historical sentiment data keyed by symbol.
 	// If nil, sentiment features are zero (placeholder).
 	sentimentData map[string]*sentiment.SentimentData
+	
+	// Delisting events for survivorship bias correction
+	delistingEvents map[string]*DelistingEvent // symbol -> delisting info
 }
 
 // ExecutionConfig controls how orders are simulated
@@ -103,6 +106,15 @@ type Trade struct {
 	GrossPnL   float64
 	NetPnL     float64
 	ExitReason string
+	IsDelisted bool // true if trade was closed due to delisting
+}
+
+// DelistingEvent marks when a symbol was delisted (for survivorship bias correction)
+type DelistingEvent struct {
+	Symbol    string
+	Timestamp time.Time
+	FinalPrice float64
+	Reason    string
 }
 
 // BacktestStats summarizes backtest results
@@ -132,6 +144,10 @@ type BacktestStats struct {
 	MaxConsecLosses int
 	TotalFees       float64
 	CAGR            float64
+	
+	// Survivorship bias tracking
+	DelistedTrades  int       // Number of trades closed due to delisting
+	DelistedSymbols []string  // Symbols that were delisted during backtest
 }
 
 // NewEngine creates a new backtest engine (5m mode by default)
@@ -186,6 +202,24 @@ func (e *Engine) SetSentimentData(data map[string]*sentiment.SentimentData) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.sentimentData = data
+}
+
+// SetDelistingEvents sets delisting events for symbols that were delisted
+// during the backtest period. This is critical for correcting survivorship bias.
+func (e *Engine) SetDelistingEvents(events map[string]*DelistingEvent) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.delistingEvents = events
+}
+
+// AddDelistingEvent adds a single delisting event for a symbol.
+func (e *Engine) AddDelistingEvent(event *DelistingEvent) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.delistingEvents == nil {
+		e.delistingEvents = make(map[string]*DelistingEvent)
+	}
+	e.delistingEvents[event.Symbol] = event
 }
 
 // AddBars adds historical candles for a symbol
@@ -339,7 +373,18 @@ func (e *Engine) Run() (*BacktestStats, error) {
 		bars := e.bars[symbol]
 		if len(bars) > 0 {
 			lastBar := bars[len(bars)-1]
-			e.closeTrade(symbol, pos, lastBar.Close, lastBar.Timestamp, "end_of_data")
+			
+			// Check if symbol was delisted - if so, use delisting price
+			exitPrice := lastBar.Close
+			exitReason := "end_of_data"
+			if delistEvent, ok := e.delistingEvents[symbol]; ok {
+				if lastBar.Timestamp.Equal(delistEvent.Timestamp) || lastBar.Timestamp.After(delistEvent.Timestamp) {
+					exitPrice = delistEvent.FinalPrice
+					exitReason = "delisted"
+				}
+			}
+			
+			e.closeTrade(symbol, pos, exitPrice, lastBar.Timestamp, exitReason)
 		}
 	}
 
@@ -376,6 +421,38 @@ func (e *Engine) checkExitConditions(symbol string, bar *Bar) {
 	if pos.Side == "SHORT" && bar.Low <= pos.TakeProfit {
 		e.closeTrade(symbol, pos, pos.TakeProfit, bar.Timestamp, "take_profit")
 		return
+	}
+}
+
+// checkDelistingEvent checks if a symbol has been delisted and forces position close.
+// This is critical for correcting survivorship bias in backtests.
+func (e *Engine) checkDelistingEvent(symbol string, bar *Bar) {
+	if e.delistingEvents == nil {
+		return
+	}
+
+	delistEvent, exists := e.delistingEvents[symbol]
+	if !exists {
+		return
+	}
+
+	pos, hasPosition := e.openPositions[symbol]
+	if !hasPosition {
+		return
+	}
+
+	// Check if delisting occurs at or before this bar
+	if bar.Timestamp.Equal(delistEvent.Timestamp) || bar.Timestamp.After(delistEvent.Timestamp) {
+		// Force close at delisting price (often near zero)
+		log.Warn().
+			Str("symbol", symbol).
+			Time("delist_time", delistEvent.Timestamp).
+			Float64("delist_price", delistEvent.FinalPrice).
+			Str("position_side", pos.Side).
+			Float64("entry_price", pos.EntryPrice).
+			Msg("Position force-closed due to delisting (survivorship bias correction)")
+
+		e.closeTrade(symbol, pos, delistEvent.FinalPrice, bar.Timestamp, "delisted")
 	}
 }
 
@@ -452,6 +529,23 @@ func (e *Engine) closeTrade(symbol string, pos *OpenPosition, exitPrice float64,
 
 	netPnL := grossPnL - entryFees - exitFees - exitSlippage
 
+	// Track if this was a delisting
+	isDelisted := reason == "delisted"
+	if isDelisted {
+		e.stats.DelistedTrades++
+		// Track unique delisted symbols
+		symbolAlreadyTracked := false
+		for _, s := range e.stats.DelistedSymbols {
+			if s == symbol {
+				symbolAlreadyTracked = true
+				break
+			}
+		}
+		if !symbolAlreadyTracked {
+			e.stats.DelistedSymbols = append(e.stats.DelistedSymbols, symbol)
+		}
+	}
+
 	trade := &Trade{
 		Symbol:     symbol,
 		Side:       pos.Side,
@@ -463,6 +557,7 @@ func (e *Engine) closeTrade(symbol string, pos *OpenPosition, exitPrice float64,
 		GrossPnL:   grossPnL,
 		NetPnL:     netPnL,
 		ExitReason: reason,
+		IsDelisted: isDelisted,
 	}
 
 	e.trades = append(e.trades, trade)

@@ -11,8 +11,35 @@ import (
 	"github.com/cgn175/quant-bot/internal/config"
 	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/execution"
+	"github.com/cgn175/quant-bot/internal/metrics"
 	"github.com/cgn175/quant-bot/internal/strategy"
 )
+
+// VolatilityRegime represents the current market volatility state
+type VolatilityRegime int
+
+const (
+	VolCalm VolatilityRegime = iota      // ATR% < 2%
+	VolNormal                            // ATR% 2-5%
+	VolElevated                          // ATR% 5-10%
+	VolExtreme                           // ATR% > 10%
+)
+
+// String returns the string representation of the volatility regime
+func (v VolatilityRegime) String() string {
+	switch v {
+	case VolCalm:
+		return "calm"
+	case VolNormal:
+		return "normal"
+	case VolElevated:
+		return "elevated"
+	case VolExtreme:
+		return "extreme"
+	default:
+		return "unknown"
+	}
+}
 
 type Strategy struct {
 	cfg        config.MarketMakingConfig
@@ -20,6 +47,7 @@ type Strategy struct {
 	executor   execution.Executor
 	execEngine *execution.Engine
 	symbols    []string
+	metrics    *metrics.Metrics
 
 	// State
 	mu        sync.RWMutex
@@ -28,6 +56,16 @@ type Strategy struct {
 	pending   map[string]*pendingRoundTrip  // symbol -> incomplete round trip
 	inventory map[string]float64            // symbol -> net inventory (positive = long)
 	returns   map[string]*ringBuffer        // symbol -> rolling returns for vol calc
+
+	// Volatility regime tracking (BTC/ETH as market proxies)
+	btcPrices     *ringBuffer      // rolling window for BTC prices (ATR calc)
+	ethPrices     *ringBuffer      // rolling window for ETH prices (ATR calc)
+	btcHighs      *ringBuffer      // rolling window for BTC highs
+	btcLows       *ringBuffer      // rolling window for BTC lows
+	ethHighs      *ringBuffer      // rolling window for ETH highs
+	ethLows       *ringBuffer      // rolling window for ETH lows
+	currentRegime VolatilityRegime // current market volatility regime
+	lastRegime    VolatilityRegime // for detecting regime changes
 }
 
 // pendingRoundTrip tracks when we've filled one side of a buy/sell pair.
@@ -68,6 +106,23 @@ func (rb *ringBuffer) Len() int {
 	return rb.pos
 }
 
+// Get returns the value at the given index (0 = most recent)
+func (rb *ringBuffer) Get(idx int) float64 {
+	if idx < 0 || idx >= rb.Len() {
+		return 0
+	}
+	// Calculate actual position
+	pos := (rb.pos - 1 - idx + rb.size) % rb.size
+	if rb.full {
+		return rb.data[pos]
+	}
+	// Not full yet, adjust for partial buffer
+	if pos >= rb.pos {
+		return rb.data[pos-rb.size+rb.pos]
+	}
+	return rb.data[pos]
+}
+
 // Stddev returns the standard deviation of the buffered values.
 func (rb *ringBuffer) Stddev() float64 {
 	n := rb.Len()
@@ -100,7 +155,15 @@ func (rb *ringBuffer) Mean() float64 {
 	return sum / float64(n)
 }
 
-func NewStrategy(cfg config.MarketMakingConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string) *Strategy {
+// TrueRange calculates the true range from high, low, close prices
+func trueRange(high, low, closePrev float64) float64 {
+	tr1 := high - low
+	tr2 := math.Abs(high - closePrev)
+	tr3 := math.Abs(low - closePrev)
+	return math.Max(tr1, math.Max(tr2, tr3))
+}
+
+func NewStrategy(cfg config.MarketMakingConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, m *metrics.Metrics) *Strategy {
 	// Initialize ring buffers for volatility tracking
 	returns := make(map[string]*ringBuffer)
 	lookback := cfg.VolLookback
@@ -111,17 +174,33 @@ func NewStrategy(cfg config.MarketMakingConfig, client exchange.Client, executor
 		returns[sym] = newRingBuffer(lookback)
 	}
 
+	// Initialize ATR period for regime detection (default 14)
+	atrPeriod := cfg.VolRegimeATRPeriod
+	if atrPeriod <= 0 {
+		atrPeriod = 14
+	}
+
 	return &Strategy{
 		cfg:        cfg,
 		client:     client,
 		executor:   executor,
 		execEngine: execEngine,
 		symbols:    symbols,
+		metrics:    m,
 		prices:     make(map[string]float64),
 		orders:     make(map[string][]*execution.Order),
 		pending:    make(map[string]*pendingRoundTrip),
 		inventory:  make(map[string]float64),
 		returns:    returns,
+		// Volatility regime buffers
+		btcPrices: newRingBuffer(atrPeriod),
+		ethPrices: newRingBuffer(atrPeriod),
+		btcHighs:  newRingBuffer(atrPeriod),
+		btcLows:   newRingBuffer(atrPeriod),
+		ethHighs:  newRingBuffer(atrPeriod),
+		ethLows:   newRingBuffer(atrPeriod),
+		currentRegime: VolCalm,
+		lastRegime:    VolCalm,
 	}
 }
 
@@ -131,6 +210,7 @@ func (s *Strategy) Start(ctx context.Context) error {
 		Float64("max_inventory", s.cfg.MaxInventory).
 		Float64("min_spread", s.cfg.MinSpreadPct).
 		Float64("max_spread", s.cfg.MaxSpreadPct).
+		Bool("vol_regime_enabled", s.cfg.VolRegimeEnabled).
 		Msg("starting market making strategy with inventory skew")
 
 	// Subscribe to OrderBooks for price updates
@@ -139,6 +219,22 @@ func (s *Strategy) Start(ctx context.Context) error {
 			s.updatePriceFromOB(ob)
 		}); err != nil {
 			return err
+		}
+	}
+
+	// Subscribe to BTC and ETH for volatility regime detection
+	if s.cfg.VolRegimeEnabled {
+		// Subscribe to BTC
+		if err := s.client.SubscribeOrderBook("BTCUSDT", func(ob exchange.OrderBook) {
+			s.updateProxyPriceFromOB("BTCUSDT", ob)
+		}); err != nil {
+			log.Warn().Err(err).Msg("failed to subscribe to BTCUSDT for volatility regime")
+		}
+		// Subscribe to ETH
+		if err := s.client.SubscribeOrderBook("ETHUSDT", func(ob exchange.OrderBook) {
+			s.updateProxyPriceFromOB("ETHUSDT", ob)
+		}); err != nil {
+			log.Warn().Err(err).Msg("failed to subscribe to ETHUSDT for volatility regime")
 		}
 	}
 
@@ -169,6 +265,123 @@ func (s *Strategy) updatePriceFromOB(ob exchange.OrderBook) {
 	s.prices[ob.Symbol] = midPrice
 }
 
+// updateProxyPriceFromOB updates BTC/ETH price buffers for volatility regime detection
+func (s *Strategy) updateProxyPriceFromOB(symbol string, ob exchange.OrderBook) {
+	if len(ob.Bids) == 0 || len(ob.Asks) == 0 {
+		return
+	}
+	bestBid := ob.Bids[0].Price
+	bestAsk := ob.Asks[0].Price
+	midPrice := (bestBid + bestAsk) / 2
+	high := ob.Asks[0].Price // best ask as high proxy
+	low := ob.Bids[0].Price  // best bid as low proxy
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch symbol {
+	case "BTCUSDT":
+		s.btcPrices.Add(midPrice)
+		s.btcHighs.Add(high)
+		s.btcLows.Add(low)
+	case "ETHUSDT":
+		s.ethPrices.Add(midPrice)
+		s.ethHighs.Add(high)
+		s.ethLows.Add(low)
+	}
+}
+
+// calculateATRPercentage calculates ATR% for a symbol from the ring buffers
+func (s *Strategy) calculateATRPercentage(prices, highs, lows *ringBuffer) float64 {
+	n := prices.Len()
+	if n < 2 {
+		return 0
+	}
+
+	period := prices.Len()
+	if period > prices.size {
+		period = prices.size
+	}
+
+	var atrSum float64
+	for i := 1; i < period; i++ {
+		closePrice := prices.Get(i)
+		high := highs.Get(i)
+		low := lows.Get(i)
+		prevClose := prices.Get(i - 1)
+		_ = closePrice // not used directly, trueRange uses high/low/prevClose
+		tr := trueRange(high, low, prevClose)
+		atrSum += tr
+	}
+
+	atr := atrSum / float64(period-1)
+	currentPrice := prices.Get(0)
+	if currentPrice == 0 {
+		return 0
+	}
+
+	return atr / currentPrice
+}
+
+// updateVolatilityRegime calculates market volatility regime based on BTC/ETH ATR%
+func (s *Strategy) updateVolatilityRegime() VolatilityRegime {
+	// Calculate ATR% for BTC and ETH
+	btcATRPct := s.calculateATRPercentage(s.btcPrices, s.btcHighs, s.btcLows)
+	ethATRPct := s.calculateATRPercentage(s.ethPrices, s.ethHighs, s.ethLows)
+
+	// Use average of BTC and ETH as market regime proxy
+	var avgATRPct float64
+	if btcATRPct > 0 && ethATRPct > 0 {
+		avgATRPct = (btcATRPct + ethATRPct) / 2
+	} else if btcATRPct > 0 {
+		avgATRPct = btcATRPct
+	} else if ethATRPct > 0 {
+		avgATRPct = ethATRPct
+	} else {
+		// Not enough data, assume calm
+		return VolCalm
+	}
+
+	// Determine regime based on thresholds
+	var regime VolatilityRegime
+	switch {
+	case avgATRPct < s.cfg.VolCalmThreshold:
+		regime = VolCalm
+	case avgATRPct < s.cfg.VolElevatedThreshold:
+		regime = VolNormal
+	case avgATRPct < s.cfg.VolExtremeThreshold:
+		regime = VolElevated
+	default:
+		regime = VolExtreme
+	}
+
+	// Log regime changes
+	if regime != s.lastRegime {
+		log.Info().
+			Str("old_regime", s.lastRegime.String()).
+			Str("new_regime", regime.String()).
+			Float64("btc_atr_pct", btcATRPct*100).
+			Float64("eth_atr_pct", ethATRPct*100).
+			Float64("avg_atr_pct", avgATRPct*100).
+			Msg("volatility regime changed")
+		s.lastRegime = regime
+	}
+
+	// Update metrics if available
+	if s.metrics != nil && s.metrics.MMVolatilityRegime != nil {
+		s.metrics.MMVolatilityRegime.WithLabelValues(regime.String()).Set(1)
+		// Reset other regimes to 0
+		for _, r := range []VolatilityRegime{VolCalm, VolNormal, VolElevated, VolExtreme} {
+			if r != regime {
+				s.metrics.MMVolatilityRegime.WithLabelValues(r.String()).Set(0)
+			}
+		}
+	}
+
+	s.currentRegime = regime
+	return regime
+}
+
 func (s *Strategy) runLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(s.cfg.RefreshTimeMs) * time.Millisecond)
 	defer ticker.Stop()
@@ -187,6 +400,38 @@ func (s *Strategy) runLoop(ctx context.Context) {
 func (s *Strategy) refreshOrders(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Update volatility regime if enabled
+	var regime VolatilityRegime
+	var spreadMultiplier float64 = 1.0
+	if s.cfg.VolRegimeEnabled {
+		regime = s.updateVolatilityRegime()
+
+		switch regime {
+		case VolCalm:
+			// Normal quoting
+			spreadMultiplier = 1.0
+		case VolNormal:
+			// Slightly wider spreads (1.5x)
+			spreadMultiplier = 1.5
+		case VolElevated:
+			// Wide spreads (configurable multiplier, default 3x)
+			spreadMultiplier = s.cfg.VolSpreadMultiplier
+			if spreadMultiplier < 1.0 {
+				spreadMultiplier = 3.0
+			}
+		case VolExtreme:
+			// HALT quoting entirely
+			log.Warn().
+				Str("regime", regime.String()).
+				Msg("market making halted due to extreme volatility")
+			if s.metrics != nil {
+				s.metrics.MMQuotesHaltedTotal.Inc()
+			}
+			s.cancelAllOrders()
+			return
+		}
+	}
 
 	for _, sym := range s.symbols {
 		price, ok := s.prices[sym]
@@ -212,8 +457,8 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 		vol := s.getVolatility(sym)
 		reservationPrice := price - inv*s.cfg.Gamma*vol*vol*price
 
-		// 4. Compute dynamic spread (volatility-adjusted)
-		spread := s.computeDynamicSpread(sym, price, vol)
+		// 4. Compute dynamic spread (volatility-adjusted with regime multiplier)
+		spread := s.computeDynamicSpread(sym, price, vol, spreadMultiplier)
 
 		// 5. Calculate skewed bid/ask
 		bidPrice := reservationPrice - spread
@@ -261,6 +506,8 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 			Float64("volatility", vol).
 			Bool("buy_active", placeBuy).
 			Bool("sell_active", placeSell).
+			Str("vol_regime", regime.String()).
+			Float64("spread_multiplier", spreadMultiplier).
 			Msg("refreshed market making orders")
 	}
 }
@@ -275,25 +522,25 @@ func (s *Strategy) getVolatility(sym string) float64 {
 	return rb.Stddev()
 }
 
-// computeDynamicSpread scales the base spread by relative volatility.
+// computeDynamicSpread scales the base spread by relative volatility and regime multiplier.
 // In calm markets spread tightens (more fills); in volatile markets it widens (less adverse selection).
-func (s *Strategy) computeDynamicSpread(sym string, price, vol float64) float64 {
+func (s *Strategy) computeDynamicSpread(sym string, price, vol, regimeMultiplier float64) float64 {
 	baseSpread := price * s.cfg.SpreadPct
 
 	if vol <= 0 {
-		// Not enough data yet — use base spread
-		return baseSpread
+		// Not enough data yet — use base spread with regime multiplier
+		return baseSpread * regimeMultiplier
 	}
 
 	// Average volatility as baseline
 	rb, ok := s.returns[sym]
 	if !ok {
-		return baseSpread
+		return baseSpread * regimeMultiplier
 	}
 	avgVol := rb.Mean()
 	if avgVol == 0 {
 		// All returns are zero (e.g. stable price), use stddev directly
-		return baseSpread
+		return baseSpread * regimeMultiplier
 	}
 
 	// Scale: currentVol / avgVol
@@ -306,7 +553,7 @@ func (s *Strategy) computeDynamicSpread(sym string, price, vol float64) float64 
 		ratio = 10 // cap extreme widening
 	}
 
-	dynamicSpread := baseSpread * ratio
+	dynamicSpread := baseSpread * ratio * regimeMultiplier
 
 	// Clamp to [min, max]
 	minSpread := price * s.cfg.MinSpreadPct
@@ -407,9 +654,6 @@ func (s *Strategy) recordRoundTrip(sym string, rt *pendingRoundTrip) {
 }
 
 func (s *Strategy) cancelAllOrders() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	for sym, orders := range s.orders {
 		for _, order := range orders {
 			s.executor.CancelOrder(sym, order.ID)
