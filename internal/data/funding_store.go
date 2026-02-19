@@ -92,6 +92,16 @@ func NewFundingStore(dbPath string) (*FundingStore, error) {
 		return nil, fmt.Errorf("create tables: %w", err)
 	}
 
+	// Migrate existing databases: add spot columns if they don't exist
+	migrations := []string{
+		"ALTER TABLE arb_positions ADD COLUMN spot_entry_price REAL NOT NULL DEFAULT 0",
+		"ALTER TABLE arb_positions ADD COLUMN spot_size REAL NOT NULL DEFAULT 0",
+	}
+	for _, migration := range migrations {
+		// Ignore errors if column already exists
+		_, _ = db.Exec(migration)
+	}
+
 	return &FundingStore{db: db}, nil
 }
 
