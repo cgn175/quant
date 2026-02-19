@@ -272,12 +272,14 @@ type FundingArbConfig struct {
 
 // BasisTradeConfig holds parameters for the basis trade (spot-futures arbitrage) strategy.
 type BasisTradeConfig struct {
-	MinBasisAnnualized float64 `mapstructure:"min_basis_annualized"` // Min annualized basis to enter (e.g., 0.15 = 15%)
-	ExitBasis          float64 `mapstructure:"exit_basis"`           // Exit when annualized basis drops below this
-	MaxPositions       int     `mapstructure:"max_positions"`
-	PositionSizeUSD    float64 `mapstructure:"position_size_usd"`
-	ScanIntervalMs     int     `mapstructure:"scan_interval_ms"`
-	DBPath             string  `mapstructure:"db_path"`
+	MinBasisAnnualized float64  `mapstructure:"min_basis_annualized"` // Min annualized basis to enter (e.g., 0.15 = 15%)
+	ExitBasis          float64  `mapstructure:"exit_basis"`           // Exit when annualized basis drops below this
+	MaxPositions       int      `mapstructure:"max_positions"`
+	PositionSizeUSD    float64  `mapstructure:"position_size_usd"`
+	ScanIntervalMs     int      `mapstructure:"scan_interval_ms"`
+	DBPath             string   `mapstructure:"db_path"`
+	CrossExchange      bool     `mapstructure:"cross_exchange"`       // Enable cross-exchange basis trading
+	Exchanges          []string `mapstructure:"exchanges"`            // Exchanges to scan (e.g., ["binance", "bybit", "okx"])
 }
 
 // StorageConfig holds data persistence configuration.
