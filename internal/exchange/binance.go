@@ -951,3 +951,34 @@ func (c *BinanceClient) fetchAndEmitOrderBook(symbol string, handler OrderBookHa
 
 	handler(ob)
 }
+
+// GetFundingRate is an alias for FetchFundingRate (for interface compatibility)
+func (c *BinanceClient) GetFundingRate(symbol string) (*FundingRateInfo, error) {
+	return c.FetchFundingRate(symbol)
+}
+
+// GetPerpPrice fetches the perpetual futures mark price
+func (c *BinanceClient) GetPerpPrice(symbol string) (float64, error) {
+	url := fmt.Sprintf("%s/fapi/v1/premiumIndex?symbol=%s", c.futuresBaseURL(), symbol)
+	
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("perp price request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Symbol    string `json:"symbol"`
+		MarkPrice string `json:"markPrice"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, fmt.Errorf("perp price parse failed: %w", err)
+	}
+
+	price, err := strconv.ParseFloat(result.MarkPrice, 64)
+	if err != nil {
+		return 0, fmt.Errorf("perp price parse float failed: %w", err)
+	}
+
+	return price, nil
+}

@@ -353,6 +353,16 @@ func (c *HubClient) spotBaseURL() string {
 	return binanceSpotBaseURL
 }
 
+// GetFundingRate is an alias for FetchFundingRate (for interface compatibility)
+func (c *HubClient) GetFundingRate(symbol string) (*FundingRateInfo, error) {
+	return c.FetchFundingRate(symbol)
+}
+
+// GetPerpPrice is an alias for FetchPerpPrice (for interface compatibility)
+func (c *HubClient) GetPerpPrice(symbol string) (float64, error) {
+	return c.FetchSpotPrice(symbol) // Hub client uses spot price
+}
+
 // ---------------------------------------------------------------------------
 // Funding Rate REST calls — direct to Binance (not via hub)
 // ---------------------------------------------------------------------------

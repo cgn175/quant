@@ -57,6 +57,8 @@ func run(cmd *cobra.Command, args []string) error {
 		return bot.RunFundingArb(cmd, cfg)
 	case "basis_trade":
 		return bot.RunBasisTrade(cmd, cfg)
+	case "liquidation":
+		return bot.RunLiquidation(cmd.Context(), cfg)
 	default:
 		// Default to ML strategy for backward compatibility
 		return bot.RunMLStrategy(cmd, cfg)
