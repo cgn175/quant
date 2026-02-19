@@ -138,6 +138,7 @@ type StrategyConfig struct {
 	MarketMaking          MarketMakingConfig  `mapstructure:"market_making"`
 	FundingArb            FundingArbConfig    `mapstructure:"funding_arb"`
 	BasisTrade            BasisTradeConfig    `mapstructure:"basis_trade"`
+	Liquidation           LiquidationConfig   `mapstructure:"liquidation"`
 	Variant               string              `mapstructure:"variant"`
 
 	// Time-based exit parameters
@@ -288,6 +289,13 @@ type BasisTradeConfig struct {
 	DBPath             string   `mapstructure:"db_path"`
 	CrossExchange      bool     `mapstructure:"cross_exchange"`       // Enable cross-exchange basis trading
 	Exchanges          []string `mapstructure:"exchanges"`            // Exchanges to scan (e.g., ["binance", "bybit", "okx"])
+}
+
+type LiquidationConfig struct {
+	FundingThreshold  float64 `mapstructure:"funding_threshold"`   // Min funding rate to signal crowded positioning (e.g., 0.05 = 5%/8h)
+	OIChangeThreshold float64 `mapstructure:"oi_change_threshold"` // Min OI % change in 24h (e.g., 20 = 20%)
+	MinConfidence     float64 `mapstructure:"min_confidence"`      // Min confidence score to trade (0-1)
+	DBPath            string  `mapstructure:"db_path"`             // Path to liquidation database
 }
 
 // StorageConfig holds data persistence configuration.
