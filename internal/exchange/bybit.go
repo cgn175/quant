@@ -59,13 +59,17 @@ type bybitFundingRate struct {
 	Symbol               string `json:"symbol"`
 	FundingRate          string `json:"fundingRate"`
 	FundingRateTimestamp string `json:"fundingRateTimestamp"`
-	NextFundingTime      string `json:"nextFundingTime"`
+}
+
+type bybitFundingResult struct {
+	Category string             `json:"category"`
+	List     []bybitFundingRate `json:"list"`
 }
 
 type bybitFundingResponse struct {
 	RetCode int                `json:"retCode"`
 	RetMsg  string             `json:"retMsg"`
-	Result  []bybitFundingRate `json:"result"`
+	Result  bybitFundingResult `json:"result"`
 }
 
 func (c *BybitClient) GetFundingRate(symbol string) (*FundingRateInfo, error) {
@@ -91,18 +95,18 @@ func (c *BybitClient) GetFundingRate(symbol string) (*FundingRateInfo, error) {
 		return nil, fmt.Errorf("bybit funding rate parse failed: %w", err)
 	}
 
-	if response.RetCode != 0 || len(response.Result) == 0 {
+	if response.RetCode != 0 || len(response.Result.List) == 0 {
 		return nil, fmt.Errorf("bybit funding rate error: %s", response.RetMsg)
 	}
 
-	fr := response.Result[0]
+	fr := response.Result.List[0]
 	fundingRate, _ := strconv.ParseFloat(fr.FundingRate, 64)
-	nextFundingTime, _ := strconv.ParseInt(fr.NextFundingTime, 10, 64)
+	fundingTimestamp, _ := strconv.ParseInt(fr.FundingRateTimestamp, 10, 64)
 
 	return &FundingRateInfo{
 		Symbol:      symbol,
 		FundingRate: fundingRate,
-		FundingTime: time.UnixMilli(nextFundingTime),
+		FundingTime: time.UnixMilli(fundingTimestamp),
 		MarkPrice:   0, // Will be fetched separately if needed
 	}, nil
 }
