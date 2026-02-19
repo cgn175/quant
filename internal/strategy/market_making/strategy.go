@@ -56,6 +56,7 @@ type Strategy struct {
 	pending   map[string]*pendingRoundTrip  // symbol -> incomplete round trip
 	inventory map[string]float64            // symbol -> net inventory (positive = long)
 	returns   map[string]*ringBuffer        // symbol -> rolling returns for vol calc
+	orderBooks map[string]exchange.OrderBook // symbol -> latest order book snapshot
 
 	// Volatility regime tracking (BTC/ETH as market proxies)
 	btcPrices     *ringBuffer      // rolling window for BTC prices (ATR calc)
@@ -192,6 +193,7 @@ func NewStrategy(cfg config.MarketMakingConfig, client exchange.Client, executor
 		pending:    make(map[string]*pendingRoundTrip),
 		inventory:  make(map[string]float64),
 		returns:    returns,
+		orderBooks: make(map[string]exchange.OrderBook),
 		// Volatility regime buffers
 		btcPrices: newRingBuffer(atrPeriod),
 		ethPrices: newRingBuffer(atrPeriod),
@@ -253,6 +255,9 @@ func (s *Strategy) updatePriceFromOB(ob exchange.OrderBook) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Store order book snapshot for imbalance calculation
+	s.orderBooks[ob.Symbol] = ob
 
 	// Track returns for volatility estimation
 	if prevPrice, ok := s.prices[ob.Symbol]; ok && prevPrice > 0 {
@@ -460,11 +465,38 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 		// 4. Compute dynamic spread (volatility-adjusted with regime multiplier)
 		spread := s.computeDynamicSpread(sym, price, vol, spreadMultiplier)
 
-		// 5. Calculate skewed bid/ask
-		bidPrice := reservationPrice - spread
-		askPrice := reservationPrice + spread
+		// 5. Apply order book imbalance skew (if enabled)
+		bidSpread := spread
+		askSpread := spread
+		imbalance := 0.0
 
-		// 6. Inventory guard — halt quoting on one side if max inventory exceeded
+		if s.cfg.ImbalanceEnabled {
+			if ob, ok := s.orderBooks[sym]; ok {
+				depth := s.cfg.ImbalanceDepth
+				if depth <= 0 {
+					depth = 20
+				}
+				imbalance = CalculateOrderBookImbalance(ob, depth)
+				
+				// Emit metric
+				if s.metrics != nil && s.metrics.MMOrderBookImbalance != nil {
+					s.metrics.MMOrderBookImbalance.WithLabelValues(sym).Set(imbalance)
+				}
+				
+				skewFactor := s.cfg.ImbalanceSkewFactor
+				if skewFactor <= 0 {
+					skewFactor = 0.5
+				}
+				
+				bidSpread, askSpread = AdjustSpreadForImbalance(spread, imbalance, skewFactor)
+			}
+		}
+
+		// 6. Calculate skewed bid/ask
+		bidPrice := reservationPrice - bidSpread
+		askPrice := reservationPrice + askSpread
+
+		// 7. Inventory guard — halt quoting on one side if max inventory exceeded
 		placeBuy := true
 		placeSell := true
 		if s.cfg.MaxInventory > 0 {
@@ -476,7 +508,7 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 			}
 		}
 
-		// 7. Place orders
+		// 8. Place orders
 		if placeBuy {
 			buyOrder, err := s.executor.ExecuteLimitOrder(sym, execution.OrderSideBuy, bidPrice, s.cfg.OrderAmount)
 			if err != nil {
@@ -502,6 +534,9 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 			Float64("bid", bidPrice).
 			Float64("ask", askPrice).
 			Float64("spread_pct", spread/price*100).
+			Float64("bid_spread_pct", bidSpread/price*100).
+			Float64("ask_spread_pct", askSpread/price*100).
+			Float64("imbalance", imbalance).
 			Float64("inventory", inv).
 			Float64("volatility", vol).
 			Bool("buy_active", placeBuy).

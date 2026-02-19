@@ -225,6 +225,11 @@ type MarketMakingConfig struct {
 	VolElevatedThreshold float64 `mapstructure:"vol_elevated_threshold"`  // ATR% threshold for elevated regime (default: 0.05 = 5%)
 	VolExtremeThreshold  float64 `mapstructure:"vol_extreme_threshold"`   // ATR% threshold for extreme regime (default: 0.10 = 10%)
 	VolSpreadMultiplier  float64 `mapstructure:"vol_spread_multiplier"`   // Spread multiplier in elevated volatility (default: 3.0 = 3x)
+
+	// Order book imbalance (directional edge from order flow)
+	ImbalanceEnabled   bool    `mapstructure:"imbalance_enabled"`    // Enable order book imbalance detection (default: false)
+	ImbalanceDepth     int     `mapstructure:"imbalance_depth"`      // Order book depth to analyze (default: 20)
+	ImbalanceSkewFactor float64 `mapstructure:"imbalance_skew_factor"` // How much imbalance affects spread (default: 0.5 = 50%)
 }
 
 // FundingArbConfig holds parameters for the funding rate arbitrage strategy.

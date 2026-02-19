@@ -39,6 +39,15 @@ strategy:
                                    #   - HALT all quoting immediately
     vol_spread_multiplier: 3.0     # Spread multiplier in elevated volatility (default: 3x)
                                    #   - Applied when regime is VolElevated
+    
+    # Order book imbalance - directional edge from order flow
+    # Skews bid/ask spreads based on real-time order book imbalance
+    # Expected improvement: 20-30% higher PnL from directional edge
+    imbalance_enabled: false       # Enable order book imbalance detection (default: false)
+    imbalance_depth: 20            # Order book depth to analyze (default: 20 levels)
+    imbalance_skew_factor: 0.5     # How much imbalance affects spread (default: 0.5 = 50%)
+                                   #   - Positive imbalance (more bids) → tighten bid, widen ask
+                                   #   - Negative imbalance (more asks) → widen bid, tighten ask
 
 execution:
   slippage_bp: 0

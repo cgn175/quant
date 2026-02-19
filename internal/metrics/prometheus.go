@@ -15,8 +15,9 @@ type Metrics struct {
 	MaxDrawdown   prometheus.Gauge
 
 	// Market Making metrics
-	MMVolatilityRegime *prometheus.GaugeVec // label: regime (calm, normal, elevated, extreme)
+	MMVolatilityRegime  *prometheus.GaugeVec // label: regime (calm, normal, elevated, extreme)
 	MMQuotesHaltedTotal prometheus.Counter   // total times quoting halted due to extreme vol
+	MMOrderBookImbalance *prometheus.GaugeVec // label: symbol - order book imbalance [-1, 1]
 
 	// Position metrics
 	OpenPositions    prometheus.Gauge
@@ -236,5 +237,9 @@ func NewMetrics() *Metrics {
 			Name: "mm_quotes_halted_total",
 			Help: "Total times market making quotes were halted due to extreme volatility",
 		}),
+		MMOrderBookImbalance: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "mm_order_book_imbalance",
+			Help: "Order book imbalance [-1, 1] where +1 = all bids, -1 = all asks",
+		}, []string{"symbol"}),
 	}
 }
