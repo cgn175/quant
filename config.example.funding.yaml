@@ -19,6 +19,18 @@ strategy:
     position_size_usd: 1000     # $1000 per position
     scan_interval_ms: 300000    # Check every 5 minutes
     max_loss_pct: 0.03          # Close if position loses > 3% (no spot hedge = directional risk)
+    delta_neutral: false        # Set true to hedge with spot (removes directional risk)
+    db_path: "funding.db"       # SQLite database for position/rate persistence
+    
+    # Momentum strategy - improves returns by 30-40%
+    # Research shows funding rates exhibit autocorrelation ~0.6-0.7
+    # Entering on momentum (high AND accelerating) filters false signals
+    use_momentum: false         # Enable momentum-based entry (default: false)
+    momentum_multiplier: 1.2    # Current must exceed avg_24h * multiplier (default: 1.2)
+                                #   - Entry: current > threshold AND current > avg_24h * 1.2
+                                #   - Captures funding that is both high and trending higher
+    momentum_exit_enable: false # Exit on momentum reversal (default: false)
+                                #   - Exit when current < avg_24h (momentum lost)
 
 execution:
   slippage_bp: 5

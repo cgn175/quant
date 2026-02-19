@@ -139,6 +139,35 @@ func (s *FundingStore) LoadFundingRates(symbol string, limit int) ([]FundingRate
 	return rates, rows.Err()
 }
 
+// GetFundingHistory returns funding rates for the last N hours.
+func (s *FundingStore) GetFundingHistory(symbol string, hoursBack int) ([]FundingRate, error) {
+	cutoff := time.Now().Add(-time.Duration(hoursBack) * time.Hour)
+	
+	rows, err := s.db.Query(
+		`SELECT symbol, rate, timestamp FROM funding_rates 
+		 WHERE symbol = ? AND timestamp >= ? 
+		 ORDER BY timestamp ASC`,
+		symbol, cutoff.UnixMilli(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rates []FundingRate
+	for rows.Next() {
+		var r FundingRate
+		var ts int64
+		if err := rows.Scan(&r.Symbol, &r.Rate, &ts); err != nil {
+			return nil, err
+		}
+		r.Timestamp = time.UnixMilli(ts)
+		rates = append(rates, r)
+	}
+
+	return rates, rows.Err()
+}
+
 // PruneFundingRates removes old funding rate rows beyond `keep` per symbol.
 func (s *FundingStore) PruneFundingRates(symbol string, keep int) error {
 	s.mu.Lock()

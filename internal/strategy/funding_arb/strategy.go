@@ -193,8 +193,30 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 	}
 
 	absFunding := math.Abs(fundingRate)
-	if absFunding < s.cfg.MinFundingRate {
-		return // funding not attractive enough
+	
+	// Momentum strategy: check if funding is high AND accelerating
+	if s.cfg.UseMomentum {
+		avg24h := CalculateFundingAverage(s.store, sym, 24)
+		multiplier := s.cfg.MomentumMultiplier
+		if multiplier <= 0 {
+			multiplier = 1.2 // default
+		}
+		
+		if !CheckFundingMomentum(fundingRate, s.cfg.MinFundingRate, avg24h, multiplier) {
+			return // momentum conditions not met
+		}
+		
+		log.Debug().
+			Str("symbol", sym).
+			Float64("current_funding", fundingRate).
+			Float64("avg_24h", avg24h).
+			Float64("multiplier", multiplier).
+			Msg("funding arb: momentum entry conditions met")
+	} else {
+		// Static threshold strategy (legacy)
+		if absFunding < s.cfg.MinFundingRate {
+			return // funding not attractive enough
+		}
 	}
 
 	// Determine direction: counter-trade the crowd
@@ -345,6 +367,7 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 	// Exit conditions:
 	// 1. Funding has normalized (below exit threshold)
 	// 2. Funding has flipped (we'd be paying instead of collecting)
+	// 3. Momentum reversal (if enabled)
 	shouldClose := false
 	reason := ""
 
@@ -365,10 +388,27 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 
 	// Only check other exit conditions if not already closing due to max loss
 	if !shouldClose {
-		absFunding := math.Abs(currentFunding)
-		if absFunding < s.cfg.ExitThreshold {
-			shouldClose = true
-			reason = "funding_normalized"
+		// Momentum exit: check if funding momentum has reversed
+		if s.cfg.UseMomentum && s.cfg.MomentumExitEnable {
+			avg24h := CalculateFundingAverage(s.store, sym, 24)
+			if CheckMomentumExit(currentFunding, avg24h) {
+				shouldClose = true
+				reason = "momentum_reversal"
+				log.Debug().
+					Str("symbol", sym).
+					Float64("current_funding", currentFunding).
+					Float64("avg_24h", avg24h).
+					Msg("funding arb: momentum reversal detected")
+			}
+		}
+		
+		// Static exit: funding normalized
+		if !shouldClose {
+			absFunding := math.Abs(currentFunding)
+			if absFunding < s.cfg.ExitThreshold {
+				shouldClose = true
+				reason = "funding_normalized"
+			}
 		}
 	}
 

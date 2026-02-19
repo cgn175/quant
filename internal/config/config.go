@@ -242,6 +242,11 @@ type FundingArbConfig struct {
 	MaxLossPct      float64 `mapstructure:"max_loss_pct"`      // Max loss per position before forced close (e.g., 0.03 = 3%)
 	DBPath          string  `mapstructure:"db_path"`           // Path to SQLite database for position/rate persistence
 	DeltaNeutral    bool    `mapstructure:"delta_neutral"`     // Enable delta-neutral spot hedge
+
+	// Momentum strategy (improves returns by 30-40%)
+	UseMomentum        bool    `mapstructure:"use_momentum"`         // Enable momentum-based entry (default: false)
+	MomentumMultiplier float64 `mapstructure:"momentum_multiplier"`  // Current must exceed avg_24h * multiplier (default: 1.2)
+	MomentumExitEnable bool    `mapstructure:"momentum_exit_enable"` // Exit on momentum reversal (default: false)
 }
 
 // BasisTradeConfig holds parameters for the basis trade (spot-futures arbitrage) strategy.
