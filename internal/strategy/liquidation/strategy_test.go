@@ -173,8 +173,8 @@ func TestLiquidationStrategy_FundingError(t *testing.T) {
 	client.AssertExpectations(t)
 }
 
-func TestEstimateLiquidationCluster(t *testing.T) {
-	strategy := &LiquidationStrategy{}
+func TestCalculateLiquidationCluster(t *testing.T) {
+	strategy := &LiquidationStrategy{cfg: config.LiquidationConfig{}}
 
 	tests := []struct {
 		name      string
@@ -210,7 +210,9 @@ func TestEstimateLiquidationCluster(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cluster := strategy.estimateLiquidationCluster(tt.price, tt.direction)
+			// Use neutral ratio for tests
+			longShortRatio := 1.0
+			cluster := strategy.calculateLiquidationCluster(tt.price, tt.direction, longShortRatio)
 			if tt.wantBelow {
 				assert.Less(t, cluster, tt.price)
 			} else {
@@ -261,7 +263,11 @@ func TestDetectCrowdedPositioning_Confidence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			signal := strategy.detectCrowdedPositioning("BTCUSDT", tt.fundingRate, tt.oiChange)
+			longShortRatio := 1.3 // Simulate long-heavy positioning for long squeeze
+			if tt.fundingRate < 0 {
+				longShortRatio = 0.7 // Short-heavy for short squeeze
+			}
+			signal := strategy.detectCrowdedPositioning("BTCUSDT", tt.fundingRate, tt.oiChange, longShortRatio)
 			if !tt.wantSignal {
 				assert.Nil(t, signal)
 				return

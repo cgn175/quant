@@ -106,6 +106,10 @@ func (c *HubClient) SubscribeOrderBook(symbol string, handler OrderBookHandler) 
 
 // SubscribeRaw subscribes to any stream with a raw data handler
 func (c *HubClient) SubscribeRaw(stream string, handler func([]byte)) error {
+	if err := c.ensureConnected(); err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	c.handlers[stream] = handler
 	c.streamType[stream] = streamTypeRaw
