@@ -110,7 +110,18 @@ type TrendConfig struct {
 	OIFilterEnabled      bool
 	OIFilterZScoreThresh float64 // z-score threshold for blocking entry (e.g., 2.0)
 	OIFilterLookback     int     // number of OI samples for z-score calculation (e.g., 30)
+
+	// Cross-sectional momentum filter
+	MomentumFilter MomentumFilterConfig
 }
+
+// MomentumFilterConfig holds parameters for cross-sectional momentum filtering
+type MomentumFilterConfig struct {
+	Enabled      bool    // Enable momentum filter
+	LookbackDays int     // Lookback period in days (default: 21 = 3 weeks)
+	TopPct       float64 // Trade only top N% by momentum (default: 0.5 = 50%)
+}
+
 
 // SectorMap classifies trading symbols by sector for correlation management (Patch 3).
 var SectorMap = map[string]string{
@@ -617,6 +628,13 @@ func (ts *TrendStrategy) OnBar(
 		log.Debug().Str("symbol", symbol).Str("reason", reason).Msg("entry blocked")
 		return nil
 	}
+
+	// ---------------------------------------------------------------
+	// Cross-sectional momentum filter
+	// ---------------------------------------------------------------
+	// TODO: Implement momentum filter - requires multi-symbol candle access
+	// For now, momentum filter is disabled in this integration
+	// Will be enabled in next commit with proper data access
 
 	// ---------------------------------------------------------------
 	// Pre-compute indicators for Layer 2 (optimization: compute once, use many)
