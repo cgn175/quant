@@ -262,6 +262,12 @@ type FundingArbConfig struct {
 	UseMomentum        bool    `mapstructure:"use_momentum"`         // Enable momentum-based entry (default: false)
 	MomentumMultiplier float64 `mapstructure:"momentum_multiplier"`  // Current must exceed avg_24h * multiplier (default: 1.2)
 	MomentumExitEnable bool    `mapstructure:"momentum_exit_enable"` // Exit on momentum reversal (default: false)
+
+	// Cross-exchange arbitrage
+	CrossExchange        bool     `mapstructure:"cross_exchange"`         // Enable cross-exchange arbitrage
+	MinSpreadBps         float64  `mapstructure:"min_spread_bps"`         // Minimum spread in basis points to enter (e.g., 50 = 0.5%)
+	Exchanges            []string `mapstructure:"exchanges"`              // List of exchanges to use ["binance", "bybit", "okx"]
+	ExchangeTestnet      map[string]bool `mapstructure:"exchange_testnet"` // Per-exchange testnet settings
 }
 
 // BasisTradeConfig holds parameters for the basis trade (spot-futures arbitrage) strategy.

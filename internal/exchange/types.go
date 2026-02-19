@@ -42,6 +42,34 @@ type Client interface {
 	Close() error
 }
 
+// CrossExchangeClient provides minimal interface for cross-exchange arbitrage
+type CrossExchangeClient interface {
+	GetFundingRate(symbol string) (*FundingRateInfo, error)
+	GetPerpPrice(symbol string) (float64, error)
+	GetSpotPrice(symbol string) (float64, error)
+	GetOrderBook(symbol string) (*OrderBook, error)
+	PlaceOrder(symbol, side string, quantity, price float64) error
+	Close() error
+}
+
+// ExchangeRates holds funding rates from multiple exchanges
+type ExchangeRates struct {
+	Binance map[string]*FundingRateInfo
+	Bybit   map[string]*FundingRateInfo
+	OKX     map[string]*FundingRateInfo
+}
+
+// CrossExchangeOpportunity represents an arbitrage opportunity
+type CrossExchangeOpportunity struct {
+	Symbol           string
+	HighExchange     string
+	LowExchange      string
+	HighFundingRate  float64
+	LowFundingRate   float64
+	SpreadBps        float64 // Spread in basis points
+	AnnualizedReturn float64 // Expected annualized return %
+}
+
 // FundingRateInfo represents a funding rate from the exchange.
 type FundingRateInfo struct {
 	Symbol      string

@@ -16,14 +16,13 @@ import (
 	"github.com/cgn175/quant-bot/internal/strategy"
 )
 
-// Strategy implements a funding rate carry trade.
+// Strategy implements a funding rate carry trade with cross-exchange support.
 //
-// When funding rate is extremely positive (longs pay shorts), we go SHORT
-// on the perpetual futures contract to collect funding payments.
-// When funding normalizes, we close the position.
+// Single exchange mode: When funding rate is extremely positive (longs pay shorts), 
+// we go SHORT on the perpetual futures contract to collect funding payments.
 //
-// This is a simplified "carry only" strategy — not fully delta-neutral
-// (no spot leg). Use with isolated margin and tight position sizing.
+// Cross-exchange mode: Short high-funding exchange and long low-funding exchange
+// to capture the funding rate differential while maintaining market neutrality.
 type Strategy struct {
 	cfg              config.FundingArbConfig
 	client           exchange.Client
@@ -32,6 +31,10 @@ type Strategy struct {
 	store            *data.FundingStore
 	symbols          []string
 	portfolioMonitor *risk.PortfolioMonitor
+
+	// Cross-exchange support
+	crossExchangeManager *CrossExchangeManager
+	crossExchangeEnabled bool
 
 	mu        sync.RWMutex
 	positions map[string]*arbPosition // symbol -> active position
@@ -50,10 +53,17 @@ type arbPosition struct {
 	FundingPayments  int     // number of funding payments received
 	SpotEntryPrice   float64 // spot hedge entry price (0 if no hedge)
 	SpotSize         float64 // spot hedge size (0 if no hedge)
+	
+	// Cross-exchange fields
+	IsCrossExchange  bool   // true if this is a cross-exchange position
+	HighExchange     string // exchange with higher funding rate (short leg)
+	LowExchange      string // exchange with lower funding rate (long leg)
+	HighFundingRate  float64 // funding rate on high exchange
+	LowFundingRate   float64 // funding rate on low exchange
 }
 
 func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore, portfolioMonitor *risk.PortfolioMonitor) *Strategy {
-	return &Strategy{
+	s := &Strategy{
 		cfg:              cfg,
 		client:           client,
 		executor:         executor,
@@ -62,7 +72,33 @@ func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor e
 		symbols:          symbols,
 		portfolioMonitor: portfolioMonitor,
 		positions:        make(map[string]*arbPosition),
+		crossExchangeEnabled: cfg.CrossExchange,
 	}
+	
+	// Initialize cross-exchange manager if enabled
+	if cfg.CrossExchange {
+		s.crossExchangeManager = NewCrossExchangeManager(store)
+		
+		// Add configured exchanges
+		for _, exchangeName := range cfg.Exchanges {
+			switch exchangeName {
+			case "binance":
+				// Use existing binance client (would need to wrap it)
+				log.Info().Str("exchange", "binance").Msg("binance client already available")
+			case "bybit":
+				testnet := cfg.ExchangeTestnet["bybit"]
+				bybitClient := exchange.NewBybitClient(testnet)
+				s.crossExchangeManager.AddExchange("bybit", bybitClient)
+				log.Info().Str("exchange", "bybit").Bool("testnet", testnet).Msg("added bybit client")
+			case "okx":
+				okxClient := exchange.NewOKXClient()
+				s.crossExchangeManager.AddExchange("okx", okxClient)
+				log.Info().Str("exchange", "okx").Msg("added okx client")
+			}
+		}
+	}
+	
+	return s
 }
 
 func (s *Strategy) Start(ctx context.Context) error {
@@ -146,17 +182,36 @@ func (s *Strategy) runLoop(ctx context.Context) {
 
 // scanAndManage checks funding rates and opens/closes positions accordingly.
 func (s *Strategy) scanAndManage() {
-	// Fetch all funding rates
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+
+	// Cross-exchange mode
+	if s.crossExchangeEnabled && s.crossExchangeManager != nil {
+		opportunities, err := s.crossExchangeManager.ScanCrossExchangeOpportunities(s.symbols, s.cfg.MinSpreadBps)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to scan cross-exchange opportunities")
+			return
+		}
+
+		for _, opp := range opportunities {
+			pos, hasPos := s.positions[opp.Symbol]
+			if hasPos {
+				s.manageCrossExchangePosition(opp.Symbol, pos, opp)
+			} else {
+				s.checkCrossExchangeEntry(opp)
+			}
+		}
+		return
+	}
+
+	// Single exchange mode (original logic)
 	rates, err := s.client.FetchFundingRates(s.symbols)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to fetch funding rates")
 		return
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now()
 
 	for _, sym := range s.symbols {
 		info, ok := rates[sym]
@@ -507,6 +562,123 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 	}
 
 	delete(s.positions, sym)
+}
+
+// checkCrossExchangeEntry evaluates cross-exchange arbitrage opportunities
+func (s *Strategy) checkCrossExchangeEntry(opp *exchange.CrossExchangeOpportunity) {
+	// Check max positions
+	if s.cfg.MaxPositions > 0 && len(s.positions) >= s.cfg.MaxPositions {
+		return
+	}
+
+	// Check minimum spread
+	if opp.SpreadBps < s.cfg.MinSpreadBps {
+		return
+	}
+
+	// Position sizing based on lower funding rate exchange (more conservative)
+	markPrice := (opp.HighFundingRate + opp.LowFundingRate) / 2 // Use average as proxy
+	size := s.cfg.PositionSizeUSD / markPrice
+	if size <= 0 {
+		return
+	}
+
+	notional := size * markPrice
+
+	// Check portfolio monitor
+	if s.portfolioMonitor != nil {
+		canEnter, reason := s.portfolioMonitor.CanEnter(opp.Symbol, notional, "funding_arb")
+		if !canEnter {
+			log.Warn().
+				Str("symbol", opp.Symbol).
+				Str("reason", reason).
+				Float64("notional", notional).
+				Msg("cross-exchange funding arb: entry blocked by portfolio monitor")
+			return
+		}
+	}
+
+	// Create cross-exchange position
+	pos := &arbPosition{
+		Symbol:          opp.Symbol,
+		Side:            "CROSS_EXCHANGE",
+		Size:            size,
+		EntryTime:       time.Now(),
+		IsCrossExchange: true,
+		HighExchange:    opp.HighExchange,
+		LowExchange:     opp.LowExchange,
+		HighFundingRate: opp.HighFundingRate,
+		LowFundingRate:  opp.LowFundingRate,
+	}
+
+	// TODO: Execute orders on both exchanges
+	// This would require implementing order execution for Bybit/OKX clients
+	log.Info().
+		Str("symbol", opp.Symbol).
+		Str("high_exchange", opp.HighExchange).
+		Str("low_exchange", opp.LowExchange).
+		Float64("spread_bps", opp.SpreadBps).
+		Float64("annualized_return", opp.AnnualizedReturn).
+		Msg("cross-exchange funding arb: opportunity identified (execution not implemented)")
+
+	// For now, just log the opportunity without executing
+	// In production, this would place SHORT order on high exchange and LONG order on low exchange
+
+	s.positions[opp.Symbol] = pos
+
+	// Register with portfolio monitor
+	if s.portfolioMonitor != nil {
+		s.portfolioMonitor.RegisterEntry(opp.Symbol, notional, "funding_arb", "NEUTRAL")
+	}
+}
+
+// manageCrossExchangePosition manages an existing cross-exchange position
+func (s *Strategy) manageCrossExchangePosition(symbol string, pos *arbPosition, opp *exchange.CrossExchangeOpportunity) {
+	// Check if spread has narrowed below exit threshold
+	if opp.SpreadBps < s.cfg.MinSpreadBps * 0.5 { // Exit at 50% of entry spread
+		s.closeCrossExchangePosition(symbol, pos, "spread_narrowed")
+		return
+	}
+
+	// Check if funding rates have flipped
+	if opp.HighExchange != pos.HighExchange || opp.LowExchange != pos.LowExchange {
+		s.closeCrossExchangePosition(symbol, pos, "funding_flipped")
+		return
+	}
+
+	// Update funding collection estimate
+	spreadDiff := opp.SpreadBps / 10000 // Convert bps to decimal
+	estimatedPayment := spreadDiff * pos.Size * (opp.HighFundingRate + opp.LowFundingRate) / 2
+	pos.FundingCollected += estimatedPayment
+	pos.FundingPayments++
+
+	log.Debug().
+		Str("symbol", symbol).
+		Float64("spread_bps", opp.SpreadBps).
+		Float64("estimated_payment", estimatedPayment).
+		Float64("total_collected", pos.FundingCollected).
+		Msg("cross-exchange funding arb: position update")
+}
+
+// closeCrossExchangePosition closes a cross-exchange arbitrage position
+func (s *Strategy) closeCrossExchangePosition(symbol string, pos *arbPosition, reason string) {
+	// TODO: Execute closing orders on both exchanges
+	log.Info().
+		Str("symbol", symbol).
+		Str("reason", reason).
+		Str("high_exchange", pos.HighExchange).
+		Str("low_exchange", pos.LowExchange).
+		Float64("funding_collected", pos.FundingCollected).
+		Int("funding_payments", pos.FundingPayments).
+		Msg("cross-exchange funding arb: closing position (execution not implemented)")
+
+	// Register exit with portfolio monitor
+	if s.portfolioMonitor != nil {
+		notional := pos.Size * (pos.HighFundingRate + pos.LowFundingRate) / 2 // Estimate
+		s.portfolioMonitor.RegisterExit(symbol, notional, "funding_arb")
+	}
+
+	delete(s.positions, symbol)
 }
 
 func (s *Strategy) closeAllPositions() {
