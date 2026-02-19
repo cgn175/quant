@@ -135,7 +135,18 @@ type StrategyConfig struct {
 	// Time-based exit parameters
 	TimeStopBars int     `mapstructure:"time_stop_bars"`  // Exit if position hasn't moved MinR after N bars
 	TimeStopMinR float64 `mapstructure:"time_stop_min_r"` // Minimum R required to avoid time stop
+
+	// Cross-sectional momentum filter
+	MomentumFilter MomentumFilterConfig `mapstructure:"momentum_filter"`
 }
+
+// MomentumFilterConfig holds cross-sectional momentum filter parameters.
+type MomentumFilterConfig struct {
+	Enabled      bool    `mapstructure:"enabled"`       // Enable momentum filter (default: false)
+	LookbackDays int     `mapstructure:"lookback_days"` // Lookback period in days (default: 21 = 3 weeks)
+	TopPct       float64 `mapstructure:"top_pct"`       // Trade only top N% by momentum (default: 0.5 = 50%)
+}
+
 
 // MLFilterConfig holds ML inference filter parameters.
 type MLFilterConfig struct {
@@ -501,6 +512,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.oi_filter.enabled", false)
 	v.SetDefault("strategy.oi_filter.zscore_thresh", 2.0)
 	v.SetDefault("strategy.oi_filter.lookback", 30)
+
+	// Momentum filter defaults
+	v.SetDefault("strategy.momentum_filter.enabled", false)
+	v.SetDefault("strategy.momentum_filter.lookback_days", 21)
+	v.SetDefault("strategy.momentum_filter.top_pct", 0.5)
 
 	// Storage defaults
 	v.SetDefault("storage.candle_db_path", "candles.db")
