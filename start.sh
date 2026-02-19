@@ -23,6 +23,9 @@ LOG_FUNDING="logs/bot_funding.log"
 CONFIG_BASIS="config.basis.yaml"
 LOG_BASIS="logs/bot_basis.log"
 
+CONFIG_LIQUIDATION="config.liquidation.yaml"
+LOG_LIQUIDATION="logs/bot_liquidation.log"
+
 # Cleanup function
 cleanup() {
     echo "Stopping services..."
@@ -31,6 +34,7 @@ cleanup() {
     if [ -n "$PID_MM" ]; then kill $PID_MM 2>/dev/null || true; fi
     if [ -n "$PID_FUNDING" ]; then kill $PID_FUNDING 2>/dev/null || true; fi
     if [ -n "$PID_BASIS" ]; then kill $PID_BASIS 2>/dev/null || true; fi
+    if [ -n "$PID_LIQUIDATION" ]; then kill $PID_LIQUIDATION 2>/dev/null || true; fi
 
     # Kill servers
     if [ -n "$ML_PID" ]; then kill $ML_PID 2>/dev/null || true; fi
@@ -68,7 +72,7 @@ is_bot_running() {
 kill_existing_bots() {
     echo "Checking for existing bot instances..."
     local count=0
-    for config in "$CONFIG_TREND" "$CONFIG_MM" "$CONFIG_FUNDING" "$CONFIG_BASIS"; do
+    for config in "$CONFIG_TREND" "$CONFIG_MM" "$CONFIG_FUNDING" "$CONFIG_BASIS" "$CONFIG_LIQUIDATION"; do
         if [ -n "$config" ]; then
             local pids=$(pgrep -f "bin/bot.*--config.*$config" 2>/dev/null)
             if [ -n "$pids" ]; then
@@ -83,7 +87,7 @@ kill_existing_bots() {
     fi
 }
 
-echo "=== Starting Quant Bot Cluster (Trend, MM, Funding, Basis) ==="
+echo "=== Starting Quant Bot Cluster (Trend, MM, Funding, Basis, Liquidation) ==="
 
 # 1. Kill any existing bot instances to prevent duplicates
 kill_existing_bots
@@ -188,9 +192,18 @@ else
     echo "⚠️  Skipping Basis Bot (config not found: $CONFIG_BASIS)"
 fi
 
+if [ -f "$CONFIG_LIQUIDATION" ]; then
+    echo "🚀 Starting Liquidation Cascade Bot..."
+    ./bin/bot --config $CONFIG_LIQUIDATION > $LOG_LIQUIDATION 2>&1 &
+    PID_LIQUIDATION=$!
+    echo "   PID: $PID_LIQUIDATION | Log: $LOG_LIQUIDATION | Config: $CONFIG_LIQUIDATION"
+else
+    echo "⚠️  Skipping Liquidation Bot (config not found: $CONFIG_LIQUIDATION)"
+fi
+
 echo "=== All systems operational ==="
 echo "Press Ctrl+C to stop all services."
 echo "View logs: tail -f logs/bot_*.log"
 
 # Wait for all processes to exit
-wait $PID_TREND $PID_MM $PID_FUNDING $PID_BASIS $ML_PID $SENTIMENT_PID
+wait $PID_TREND $PID_MM $PID_FUNDING $PID_BASIS $PID_LIQUIDATION $ML_PID $SENTIMENT_PID
