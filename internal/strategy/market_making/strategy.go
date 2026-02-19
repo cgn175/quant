@@ -41,6 +41,11 @@ func (v VolatilityRegime) String() string {
 	}
 }
 
+// OrderFlowProvider provides real-time order flow data for directional edge.
+type OrderFlowProvider interface {
+	GetOrderFlowDelta(symbol string) (delta5s float64, ok bool)
+}
+
 type Strategy struct {
 	cfg        config.MarketMakingConfig
 	client     exchange.Client
@@ -57,6 +62,7 @@ type Strategy struct {
 	inventory map[string]float64            // symbol -> net inventory (positive = long)
 	returns   map[string]*ringBuffer        // symbol -> rolling returns for vol calc
 	orderBooks map[string]exchange.OrderBook // symbol -> latest order book snapshot
+	orderFlow  OrderFlowProvider              // optional, nil if not enabled
 
 	// Volatility regime tracking (BTC/ETH as market proxies)
 	btcPrices     *ringBuffer      // rolling window for BTC prices (ATR calc)
@@ -164,7 +170,7 @@ func trueRange(high, low, closePrev float64) float64 {
 	return math.Max(tr1, math.Max(tr2, tr3))
 }
 
-func NewStrategy(cfg config.MarketMakingConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, m *metrics.Metrics) *Strategy {
+func NewStrategy(cfg config.MarketMakingConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, m *metrics.Metrics, orderFlow OrderFlowProvider) *Strategy {
 	// Initialize ring buffers for volatility tracking
 	returns := make(map[string]*ringBuffer)
 	lookback := cfg.VolLookback
@@ -194,6 +200,7 @@ func NewStrategy(cfg config.MarketMakingConfig, client exchange.Client, executor
 		inventory:  make(map[string]float64),
 		returns:    returns,
 		orderBooks: make(map[string]exchange.OrderBook),
+		orderFlow:  orderFlow,
 		// Volatility regime buffers
 		btcPrices: newRingBuffer(atrPeriod),
 		ethPrices: newRingBuffer(atrPeriod),
@@ -492,6 +499,42 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 			}
 		}
 
+		// 5b. Apply order flow skew (if enabled)
+		flowSkew := 0.0
+		if s.cfg.OrderFlowEnabled && s.orderFlow != nil {
+			if delta5s, ok := s.orderFlow.GetOrderFlowDelta(sym); ok {
+				if math.Abs(delta5s) >= s.cfg.OrderFlowThreshold {
+					skewFactor := s.cfg.OrderFlowSkewFactor
+					if skewFactor <= 0 {
+						skewFactor = 0.3
+					}
+					// Normalize delta to [-1, 1] range using threshold as reference
+					normalizedDelta := delta5s / (s.cfg.OrderFlowThreshold * 10)
+					if normalizedDelta > 1.0 {
+						normalizedDelta = 1.0
+					} else if normalizedDelta < -1.0 {
+						normalizedDelta = -1.0
+					}
+
+					// Positive delta (aggressive buying) → tighten bid, widen ask
+					flowSkew = normalizedDelta * skewFactor
+					bidSpread *= (1 - flowSkew)
+					askSpread *= (1 + flowSkew)
+
+					// Floor spreads
+					minSpread := price * s.cfg.MinSpreadPct
+					if minSpread > 0 {
+						if bidSpread < minSpread {
+							bidSpread = minSpread
+						}
+						if askSpread < minSpread {
+							askSpread = minSpread
+						}
+					}
+				}
+			}
+		}
+
 		// 6. Calculate skewed bid/ask
 		bidPrice := reservationPrice - bidSpread
 		askPrice := reservationPrice + askSpread
@@ -537,6 +580,7 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 			Float64("bid_spread_pct", bidSpread/price*100).
 			Float64("ask_spread_pct", askSpread/price*100).
 			Float64("imbalance", imbalance).
+			Float64("order_flow_skew", flowSkew).
 			Float64("inventory", inv).
 			Float64("volatility", vol).
 			Bool("buy_active", placeBuy).

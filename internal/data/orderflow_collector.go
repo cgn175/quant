@@ -249,6 +249,25 @@ func (ofc *OrderFlowCollector) persist(windowSize int) {
 	}
 }
 
+// GetOrderFlowDelta returns the current 5-second delta for a symbol.
+// Returns ok=false if the symbol is not tracked or data is stale.
+func (ofc *OrderFlowCollector) GetOrderFlowDelta(symbol string) (delta5s float64, ok bool) {
+	ofc.mu.Lock()
+	defer ofc.mu.Unlock()
+
+	state, exists := ofc.deltas[symbol]
+	if !exists {
+		return 0, false
+	}
+
+	// Consider data stale if last update was more than 10 seconds ago
+	if time.Since(state.lastUpdate) > 10*time.Second {
+		return 0, false
+	}
+
+	return state.delta5s, true
+}
+
 func (ofc *OrderFlowCollector) Stop() error {
 	ofc.cancel()
 	return ofc.db.Close()

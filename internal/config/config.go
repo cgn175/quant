@@ -255,6 +255,11 @@ type MarketMakingConfig struct {
 	ImbalanceEnabled   bool    `mapstructure:"imbalance_enabled"`    // Enable order book imbalance detection (default: false)
 	ImbalanceDepth     int     `mapstructure:"imbalance_depth"`      // Order book depth to analyze (default: 20)
 	ImbalanceSkewFactor float64 `mapstructure:"imbalance_skew_factor"` // How much imbalance affects spread (default: 0.5 = 50%)
+
+	// Order flow integration (real-time trade delta for directional edge)
+	OrderFlowEnabled    bool    `mapstructure:"orderflow_enabled"`      // Enable order flow integration (default: false)
+	OrderFlowThreshold  float64 `mapstructure:"orderflow_threshold"`    // Min delta magnitude to adjust skew (default: 10.0)
+	OrderFlowSkewFactor float64 `mapstructure:"orderflow_skew_factor"`  // How much delta affects spread skew (default: 0.3)
 }
 
 // FundingArbConfig holds parameters for the funding rate arbitrage strategy.
@@ -374,6 +379,80 @@ func (c *Config) Validate() error {
 			if s.PartialExits.SecondExitPct <= 0 || s.PartialExits.SecondExitPct > 1.0 {
 				return fmt.Errorf("strategy.partial_exits.second_exit_pct must be > 0 and <= 1.0, got %.2f", s.PartialExits.SecondExitPct)
 			}
+		}
+	}
+
+	// Market-making-specific validation
+	if c.Strategy.Type == "market_making" {
+		mm := c.Strategy.MarketMaking
+		if mm.SpreadPct <= 0 {
+			return fmt.Errorf("strategy.market_making.spread_pct must be > 0, got %.4f", mm.SpreadPct)
+		}
+		if mm.OrderAmount <= 0 {
+			return fmt.Errorf("strategy.market_making.order_amount must be > 0, got %.4f", mm.OrderAmount)
+		}
+		if mm.RefreshTimeMs <= 0 {
+			return fmt.Errorf("strategy.market_making.refresh_time_ms must be > 0, got %d", mm.RefreshTimeMs)
+		}
+		if mm.Gamma < 0 {
+			return fmt.Errorf("strategy.market_making.gamma must be >= 0, got %.4f", mm.Gamma)
+		}
+		if mm.MaxInventory < 0 {
+			return fmt.Errorf("strategy.market_making.max_inventory must be >= 0, got %.4f", mm.MaxInventory)
+		}
+		if mm.MinSpreadPct > 0 && mm.MaxSpreadPct > 0 && mm.MinSpreadPct >= mm.MaxSpreadPct {
+			return fmt.Errorf("strategy.market_making.min_spread_pct (%.4f) must be < max_spread_pct (%.4f)", mm.MinSpreadPct, mm.MaxSpreadPct)
+		}
+		if mm.VolRegimeEnabled {
+			if mm.VolCalmThreshold >= mm.VolElevatedThreshold {
+				return fmt.Errorf("strategy.market_making.vol_calm_threshold (%.4f) must be < vol_elevated_threshold (%.4f)", mm.VolCalmThreshold, mm.VolElevatedThreshold)
+			}
+			if mm.VolElevatedThreshold >= mm.VolExtremeThreshold {
+				return fmt.Errorf("strategy.market_making.vol_elevated_threshold (%.4f) must be < vol_extreme_threshold (%.4f)", mm.VolElevatedThreshold, mm.VolExtremeThreshold)
+			}
+		}
+	}
+
+	// Funding arb-specific validation
+	if c.Strategy.Type == "funding_arb" {
+		fa := c.Strategy.FundingArb
+		if fa.MinFundingRate <= 0 {
+			return fmt.Errorf("strategy.funding_arb.min_funding_rate must be > 0, got %.6f", fa.MinFundingRate)
+		}
+		if fa.ExitThreshold < 0 {
+			return fmt.Errorf("strategy.funding_arb.exit_threshold must be >= 0, got %.6f", fa.ExitThreshold)
+		}
+		if fa.ExitThreshold >= fa.MinFundingRate {
+			return fmt.Errorf("strategy.funding_arb.exit_threshold (%.6f) must be < min_funding_rate (%.6f)", fa.ExitThreshold, fa.MinFundingRate)
+		}
+		if fa.MaxPositions <= 0 {
+			return fmt.Errorf("strategy.funding_arb.max_positions must be > 0, got %d", fa.MaxPositions)
+		}
+		if fa.PositionSizeUSD <= 0 {
+			return fmt.Errorf("strategy.funding_arb.position_size_usd must be > 0, got %.2f", fa.PositionSizeUSD)
+		}
+		if fa.MaxLossPct <= 0 || fa.MaxLossPct >= 1.0 {
+			return fmt.Errorf("strategy.funding_arb.max_loss_pct must be > 0 and < 1.0, got %.4f", fa.MaxLossPct)
+		}
+	}
+
+	// Basis trade-specific validation
+	if c.Strategy.Type == "basis_trade" {
+		bt := c.Strategy.BasisTrade
+		if bt.MinBasisAnnualized <= 0 {
+			return fmt.Errorf("strategy.basis_trade.min_basis_annualized must be > 0, got %.4f", bt.MinBasisAnnualized)
+		}
+		if bt.ExitBasis < 0 {
+			return fmt.Errorf("strategy.basis_trade.exit_basis must be >= 0, got %.4f", bt.ExitBasis)
+		}
+		if bt.ExitBasis >= bt.MinBasisAnnualized {
+			return fmt.Errorf("strategy.basis_trade.exit_basis (%.4f) must be < min_basis_annualized (%.4f)", bt.ExitBasis, bt.MinBasisAnnualized)
+		}
+		if bt.MaxPositions <= 0 {
+			return fmt.Errorf("strategy.basis_trade.max_positions must be > 0, got %d", bt.MaxPositions)
+		}
+		if bt.PositionSizeUSD <= 0 {
+			return fmt.Errorf("strategy.basis_trade.position_size_usd must be > 0, got %.2f", bt.PositionSizeUSD)
 		}
 	}
 
@@ -509,6 +588,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.market_making.vol_elevated_threshold", 0.05)   // 5% ATR
 	v.SetDefault("strategy.market_making.vol_extreme_threshold", 0.10)    // 10% ATR
 	v.SetDefault("strategy.market_making.vol_spread_multiplier", 3.0)     // 3x spread in elevated vol
+
+	// Order flow integration defaults (disabled by default)
+	v.SetDefault("strategy.market_making.orderflow_enabled", false)
+	v.SetDefault("strategy.market_making.orderflow_threshold", 10.0)
+	v.SetDefault("strategy.market_making.orderflow_skew_factor", 0.3)
 
 	// Funding arb defaults
 	v.SetDefault("strategy.funding_arb.min_funding_rate", 0.0005) // 0.05% per 8h
