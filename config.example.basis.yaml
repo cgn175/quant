@@ -1,0 +1,50 @@
+mode: paper
+
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+
+exchange:
+  name: binance
+  testnet: true
+  hub_url: "localhost:9090"
+
+strategy:
+  type: basis_trade
+  basis_trade:
+    # Entry threshold: Annualized basis must exceed this to enter
+    # Formula: annualized_basis = ((perp - spot) / spot) * 365 * 3
+    # Example: 15% annualized = ~3.75% per quarter
+    min_basis_annualized: 0.15  # 15%
+    
+    # Exit threshold: Close position when basis converges below this
+    exit_basis: 0.05  # 5% annualized
+    
+    # Position sizing per trade
+    position_size_usd: 1000  # $1000
+    
+    # Maximum concurrent positions
+    max_positions: 3
+    
+    # How often to check basis and manage positions
+    scan_interval_ms: 300000  # 5 minutes
+    
+    # Database for position persistence
+    # Shares the same DB as funding_arb strategy (uses arb_positions table)
+    db_path: "funding.db"
+
+execution:
+  slippage_bp: 5
+  fee_percent: 0.04
+
+# Portfolio risk management
+# These settings coordinate with funding_arb strategy to prevent
+# double exposure on the same symbol
+portfolio_risk:
+  max_total_perp_spot_exposure: 100000  # $100k total across all strategies
+  max_per_symbol_exposure: 50000        # $50k per symbol
+  enable_correlated_check: true         # Prevent overlap with funding_arb
+
+monitoring:
+  prometheus_port: 9093
