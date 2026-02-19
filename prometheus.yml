@@ -5,7 +5,7 @@ global:
 scrape_configs:
   - job_name: 'strategies'
     static_configs:
-      - targets: ['host.docker.internal:9090', 'host.docker.internal:9091', 'host.docker.internal:9092']
+      - targets: ['host.docker.internal:9090', 'host.docker.internal:9091', 'host.docker.internal:9092', 'host.docker.internal:9093']
     metrics_path: /metrics
     relabel_configs:
       - source_labels: [__address__]
@@ -20,3 +20,7 @@ scrape_configs:
         regex: '.*:9092'
         target_label: strategy
         replacement: 'Funding Arb'
+      - source_labels: [__address__]
+        regex: '.*:9093'
+        target_label: strategy
+        replacement: 'Basis Trade'
