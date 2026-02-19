@@ -37,6 +37,7 @@ type streamType int
 const (
 	streamTypeCandle streamType = iota
 	streamTypeOrderBook
+	streamTypeRaw
 )
 
 type streamSubscription struct {

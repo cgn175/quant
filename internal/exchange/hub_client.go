@@ -104,6 +104,21 @@ func (c *HubClient) SubscribeOrderBook(symbol string, handler OrderBookHandler) 
 	return nil
 }
 
+// SubscribeRaw subscribes to any stream with a raw data handler
+func (c *HubClient) SubscribeRaw(stream string, handler func([]byte)) error {
+	c.mu.Lock()
+	c.handlers[stream] = handler
+	c.streamType[stream] = streamTypeRaw
+	c.mu.Unlock()
+
+	if err := c.sendSubscribe(stream); err != nil {
+		return err
+	}
+
+	log.Info().Str("stream", stream).Str("hub", c.hubURL).Msg("hub: subscribed to raw stream")
+	return nil
+}
+
 // PollCandles delegates to SubscribeCandles since the hub provides WS data.
 func (c *HubClient) PollCandles(symbol, interval string, handler CandleHandler, _ time.Duration) {
 	log.Info().Str("symbol", symbol).Str("interval", interval).Msg("hub mode: using WS subscription instead of REST polling")
@@ -237,6 +252,11 @@ func (c *HubClient) dispatchMessage(msg hubMessage) {
 		}
 		if h, ok := handler.(OrderBookHandler); ok {
 			go h(ob)
+		}
+
+	case streamTypeRaw:
+		if h, ok := handler.(func([]byte)); ok {
+			go h(msg.Data)
 		}
 	}
 }

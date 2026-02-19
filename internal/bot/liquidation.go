@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/cgn175/quant-bot/internal/config"
@@ -10,6 +11,13 @@ import (
 	"github.com/cgn175/quant-bot/internal/strategy/liquidation"
 	"github.com/rs/zerolog/log"
 )
+
+type markPriceUpdate struct {
+	Symbol      string `json:"s"`
+	MarkPrice   string `json:"p"`
+	FundingRate string `json:"r"`
+	NextFunding int64  `json:"T"`
+}
 
 func RunLiquidation(ctx context.Context, cfg *config.Config) error {
 	log.Info().Msg("starting liquidation cascade strategy")
@@ -32,7 +40,50 @@ func RunLiquidation(ctx context.Context, cfg *config.Config) error {
 	// Create liquidation strategy
 	strategy := liquidation.NewLiquidationStrategy(cfg.Strategy.Liquidation, db, client)
 
-	// Scan for opportunities every 5 minutes
+	// Subscribe to markPrice streams for real-time funding rate updates
+	if hubClient, ok := client.(*exchange.HubClient); ok {
+		// Subscribe to markPrice for each symbol
+		for _, symbol := range cfg.Symbols {
+			stream := symbol + "@markPrice"
+			handler := func(data []byte) {
+				var update markPriceUpdate
+				if err := json.Unmarshal(data, &update); err != nil {
+					log.Error().Err(err).Msg("failed to parse markPrice update")
+					return
+				}
+
+				// Trigger scan when funding rate updates
+				signal, err := strategy.ScanOpportunities(update.Symbol)
+				if err != nil {
+					log.Error().Err(err).Str("symbol", update.Symbol).Msg("scan failed")
+					return
+				}
+
+				if signal != nil && signal.Confidence >= cfg.Strategy.Liquidation.MinConfidence {
+					log.Info().
+						Str("symbol", signal.Symbol).
+						Str("direction", signal.Direction).
+						Float64("funding", signal.FundingRate).
+						Float64("oi_change", signal.OIChange).
+						Float64("liq_cluster", signal.LiqCluster).
+						Float64("confidence", signal.Confidence).
+						Msg("🔥 LIQUIDATION CASCADE SIGNAL")
+				}
+			}
+
+			if err := hubClient.SubscribeRaw(stream, handler); err != nil {
+				log.Error().Err(err).Str("stream", stream).Msg("failed to subscribe")
+			} else {
+				log.Info().Str("stream", stream).Msg("subscribed to markPrice stream")
+			}
+		}
+
+		// Keep running until context cancelled
+		<-ctx.Done()
+		return nil
+	}
+
+	// Fallback: REST polling if not using hub
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -57,10 +108,8 @@ func RunLiquidation(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
-	// Scan immediately
 	scan()
 
-	// Then scan every 5 minutes
 	for {
 		select {
 		case <-ctx.Done():
