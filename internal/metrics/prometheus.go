@@ -52,6 +52,11 @@ type Metrics struct {
 	ADXFilterBlockedTotal prometheus.CounterVec
 	MLFilterLatency       prometheus.Histogram
 	MLFilterFallbackTotal prometheus.Counter
+
+	// Portfolio Monitor metrics
+	PortfolioSymbolExposure prometheus.GaugeVec // exposure per symbol
+	PortfolioTotalExposure  prometheus.Gauge   // total exposure across all symbols
+	PortfolioEntriesBlocked prometheus.CounterVec // entries blocked by reason
 }
 
 // NewMetrics creates and registers prometheus metrics
@@ -203,5 +208,19 @@ func NewMetrics() *Metrics {
 			Name: "ml_filter_fallback_total",
 			Help: "Times ML filter fell back to ADX",
 		}),
+
+		// Portfolio Monitor metrics
+		PortfolioSymbolExposure: *promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "portfolio_symbol_exposure_usd",
+			Help: "Current USD exposure per symbol across all strategies",
+		}, []string{"symbol"}),
+		PortfolioTotalExposure: promauto.NewGauge(prometheus.GaugeOpts{
+			Name: "portfolio_total_exposure_usd",
+			Help: "Total USD exposure across all symbols and strategies",
+		}),
+		PortfolioEntriesBlocked: *promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "portfolio_entries_blocked_total",
+			Help: "Entries blocked by portfolio monitor per symbol and reason",
+		}, []string{"symbol", "reason"}),
 	}
 }

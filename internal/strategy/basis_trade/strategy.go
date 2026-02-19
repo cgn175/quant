@@ -11,6 +11,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/execution"
+	"github.com/cgn175/quant-bot/internal/risk"
 	"github.com/cgn175/quant-bot/internal/strategy"
 )
 
@@ -21,12 +22,13 @@ import (
 // When basis converges below exit threshold, we close both legs.
 // Profit = basis captured + any funding collected.
 type Strategy struct {
-	cfg        config.BasisTradeConfig
-	client     exchange.Client
-	executor   execution.Executor
-	execEngine *execution.Engine
-	store      *data.FundingStore
-	symbols    []string
+	cfg              config.BasisTradeConfig
+	client           exchange.Client
+	executor         execution.Executor
+	execEngine       *execution.Engine
+	store            *data.FundingStore
+	symbols          []string
+	portfolioMonitor *risk.PortfolioMonitor
 
 	mu        sync.RWMutex
 	positions map[string]*basisPosition
@@ -44,15 +46,16 @@ type basisPosition struct {
 	EntryTime      time.Time
 }
 
-func NewStrategy(cfg config.BasisTradeConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore) *Strategy {
+func NewStrategy(cfg config.BasisTradeConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore, portfolioMonitor *risk.PortfolioMonitor) *Strategy {
 	return &Strategy{
-		cfg:        cfg,
-		client:     client,
-		executor:   executor,
-		execEngine: execEngine,
-		store:      store,
-		symbols:    symbols,
-		positions:  make(map[string]*basisPosition),
+		cfg:              cfg,
+		client:           client,
+		executor:         executor,
+		execEngine:       execEngine,
+		store:            store,
+		symbols:          symbols,
+		portfolioMonitor: portfolioMonitor,
+		positions:        make(map[string]*basisPosition),
 	}
 }
 
@@ -189,6 +192,21 @@ func (s *Strategy) checkEntry(sym string, annualizedBasis, spotPrice, markPrice 
 		return
 	}
 
+	notional := size * spotPrice
+
+	// Check portfolio monitor for cross-strategy limits
+	if s.portfolioMonitor != nil {
+		canEnter, reason := s.portfolioMonitor.CanEnter(sym, notional, "basis_trade")
+		if !canEnter {
+			log.Warn().
+				Str("symbol", sym).
+				Str("reason", reason).
+				Float64("notional", notional).
+				Msg("basis trade: entry blocked by portfolio monitor")
+			return
+		}
+	}
+
 	// Buy spot
 	spotOrder, err := s.executor.ExecuteMarketOrder(sym, execution.OrderSideBuy, size)
 	if err != nil {
@@ -236,6 +254,11 @@ func (s *Strategy) checkEntry(sym string, annualizedBasis, spotPrice, markPrice 
 	}
 
 	s.positions[sym] = pos
+
+	// Register with portfolio monitor (delta-neutral structure)
+	if s.portfolioMonitor != nil {
+		s.portfolioMonitor.RegisterEntry(sym, notional, "basis_trade", "NEUTRAL")
+	}
 
 	log.Info().
 		Str("symbol", sym).
@@ -295,6 +318,12 @@ func (s *Strategy) managePosition(sym string, pos *basisPosition, annualizedBasi
 		Float64("perp_pnl", perpPnL).
 		Float64("total_pnl", totalPnL).
 		Msg("basis trade: closed position")
+
+	// Register exit with portfolio monitor
+	if s.portfolioMonitor != nil {
+		notional := pos.SpotSize * spotPrice
+		s.portfolioMonitor.RegisterExit(sym, notional, "basis_trade")
+	}
 
 	delete(s.positions, sym)
 }

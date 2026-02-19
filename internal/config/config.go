@@ -8,18 +8,19 @@ import (
 )
 
 type Config struct {
-	Exchange   ExchangeConfig   `mapstructure:"exchange"`
-	Symbols    []string         `mapstructure:"symbols"`
-	BarSize    string           `mapstructure:"bar_size"`
-	Sentiment  SentimentConfig  `mapstructure:"sentiment"`
-	Risk       RiskConfig       `mapstructure:"risk"`
-	Model      ModelConfig      `mapstructure:"model"`
-	Execution  ExecutionConfig  `mapstructure:"execution"`
-	Monitoring MonitoringConfig `mapstructure:"monitoring"`
-	Alerts     AlertsConfig     `mapstructure:"alerts"`
-	Mode       string           `mapstructure:"mode"`
-	Strategy   StrategyConfig   `mapstructure:"strategy"`
-	Storage    StorageConfig    `mapstructure:"storage"`
+	Exchange        ExchangeConfig      `mapstructure:"exchange"`
+	Symbols         []string            `mapstructure:"symbols"`
+	BarSize         string              `mapstructure:"bar_size"`
+	Sentiment       SentimentConfig     `mapstructure:"sentiment"`
+	Risk            RiskConfig          `mapstructure:"risk"`
+	PortfolioRisk   PortfolioRiskConfig `mapstructure:"portfolio_risk"`
+	Model           ModelConfig         `mapstructure:"model"`
+	Execution       ExecutionConfig     `mapstructure:"execution"`
+	Monitoring      MonitoringConfig    `mapstructure:"monitoring"`
+	Alerts          AlertsConfig        `mapstructure:"alerts"`
+	Mode            string              `mapstructure:"mode"`
+	Strategy        StrategyConfig      `mapstructure:"strategy"`
+	Storage         StorageConfig       `mapstructure:"storage"`
 }
 
 type ExchangeConfig struct {
@@ -50,6 +51,13 @@ type RiskConfig struct {
 	MaxOpenPositions   int     `mapstructure:"max_open_positions"`
 	MaxLeverage        float64 `mapstructure:"max_leverage"`
 	InitialEquityVal   float64 `mapstructure:"initial_equity"`
+}
+
+// PortfolioRiskConfig holds cross-strategy position limit settings.
+type PortfolioRiskConfig struct {
+	MaxTotalPerpSpotExposure float64 `mapstructure:"max_total_perp_spot_exposure"` // Max $ across all strategies (default $100k)
+	MaxPerSymbolExposure     float64 `mapstructure:"max_per_symbol_exposure"`      // Max $ per symbol (default $50k)
+	EnableCorrelatedCheck    bool    `mapstructure:"enable_correlated_check"`      // Block correlated strategies on same symbol
 }
 
 // InitialEquity returns the configured initial equity, defaulting to 10000
@@ -453,6 +461,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.basis_trade.position_size_usd", 1000.0)
 	v.SetDefault("strategy.basis_trade.scan_interval_ms", 300000)
 	v.SetDefault("strategy.basis_trade.db_path", "basis.db")
+
+	// Portfolio risk defaults
+	v.SetDefault("portfolio_risk.max_total_perp_spot_exposure", 100000.0) // $100k default
+	v.SetDefault("portfolio_risk.max_per_symbol_exposure", 50000.0)      // $50k default
+	v.SetDefault("portfolio_risk.enable_correlated_check", true)         // Block funding_arb + basis_trade overlap
 
 	// OI filter defaults
 	v.SetDefault("strategy.oi_filter.enabled", false)

@@ -12,6 +12,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/exchange"
 	"github.com/cgn175/quant-bot/internal/execution"
+	"github.com/cgn175/quant-bot/internal/risk"
 	"github.com/cgn175/quant-bot/internal/strategy"
 )
 
@@ -24,12 +25,13 @@ import (
 // This is a simplified "carry only" strategy — not fully delta-neutral
 // (no spot leg). Use with isolated margin and tight position sizing.
 type Strategy struct {
-	cfg        config.FundingArbConfig
-	client     exchange.Client
-	executor   execution.Executor
-	execEngine *execution.Engine
-	store      *data.FundingStore
-	symbols    []string
+	cfg              config.FundingArbConfig
+	client           exchange.Client
+	executor         execution.Executor
+	execEngine       *execution.Engine
+	store            *data.FundingStore
+	symbols          []string
+	portfolioMonitor *risk.PortfolioMonitor
 
 	mu        sync.RWMutex
 	positions map[string]*arbPosition // symbol -> active position
@@ -50,15 +52,16 @@ type arbPosition struct {
 	SpotSize         float64 // spot hedge size (0 if no hedge)
 }
 
-func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore) *Strategy {
+func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore, portfolioMonitor *risk.PortfolioMonitor) *Strategy {
 	return &Strategy{
-		cfg:        cfg,
-		client:     client,
-		executor:   executor,
-		execEngine: execEngine,
-		store:      store,
-		symbols:    symbols,
-		positions:  make(map[string]*arbPosition),
+		cfg:              cfg,
+		client:           client,
+		executor:         executor,
+		execEngine:       execEngine,
+		store:            store,
+		symbols:          symbols,
+		portfolioMonitor: portfolioMonitor,
+		positions:        make(map[string]*arbPosition),
 	}
 }
 
@@ -213,6 +216,21 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 		return
 	}
 
+	notional := size * markPrice
+
+	// Check portfolio monitor for cross-strategy limits
+	if s.portfolioMonitor != nil {
+		canEnter, reason := s.portfolioMonitor.CanEnter(sym, notional, "funding_arb")
+		if !canEnter {
+			log.Warn().
+				Str("symbol", sym).
+				Str("reason", reason).
+				Float64("notional", notional).
+				Msg("funding arb: entry blocked by portfolio monitor")
+			return
+		}
+	}
+
 	// Execute perp entry
 	order, err := s.executor.ExecuteMarketOrder(sym, orderSide, size)
 	if err != nil {
@@ -275,6 +293,15 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 	}
 
 	s.positions[sym] = pos
+
+	// Register with portfolio monitor
+	if s.portfolioMonitor != nil {
+		exposureSide := "NEUTRAL"
+		if !s.cfg.DeltaNeutral {
+			exposureSide = side
+		}
+		s.portfolioMonitor.RegisterEntry(sym, notional, "funding_arb", exposureSide)
+	}
 
 	// Annualized yield: funding * 3 payments/day * 365 days
 	annualizedYield := math.Abs(fundingRate) * 3 * 365 * 100
@@ -432,6 +459,12 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 		Int("funding_payments", pos.FundingPayments).
 		Bool("delta_neutral", pos.SpotSize > 0).
 		Msg("funding arb: closed position")
+
+	// Register exit with portfolio monitor
+	if s.portfolioMonitor != nil {
+		notional := pos.Size * markPrice
+		s.portfolioMonitor.RegisterExit(sym, notional, "funding_arb")
+	}
 
 	delete(s.positions, sym)
 }

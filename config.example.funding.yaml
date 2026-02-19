@@ -24,5 +24,12 @@ execution:
   slippage_bp: 5
   fee_percent: 0.04
 
+# Portfolio-wide cross-strategy position limits
+# Prevents double exposure when Funding Arb and Basis Trade fire on same symbol
+portfolio_risk:
+  max_total_perp_spot_exposure: 100000  # Max $100k across all strategies
+  max_per_symbol_exposure: 50000        # Max $50k per symbol
+  enable_correlated_check: true         # Block funding_arb + basis_trade overlap
+
 monitoring:
   prometheus_port: 9092

@@ -12,6 +12,7 @@ import (
 	"github.com/cgn175/quant-bot/internal/data"
 	"github.com/cgn175/quant-bot/internal/execution"
 	"github.com/cgn175/quant-bot/internal/metrics"
+	"github.com/cgn175/quant-bot/internal/risk"
 	basistrade "github.com/cgn175/quant-bot/internal/strategy/basis_trade"
 )
 
@@ -73,8 +74,25 @@ func RunBasisTrade(cmd *cobra.Command, cfg *config.Config) error {
 	}
 	defer store.Close()
 
+	// Portfolio monitor for cross-strategy position limits
+	portfolioMonitor := risk.NewPortfolioMonitor(
+		cfg.PortfolioRisk.MaxTotalPerpSpotExposure,
+		cfg.PortfolioRisk.MaxPerSymbolExposure,
+		cfg.PortfolioRisk.EnableCorrelatedCheck,
+	)
+	portfolioMonitor.SetMetrics(
+		&prom.PortfolioSymbolExposure,
+		prom.PortfolioTotalExposure,
+		&prom.PortfolioEntriesBlocked,
+	)
+	log.Info().
+		Float64("max_total", cfg.PortfolioRisk.MaxTotalPerpSpotExposure).
+		Float64("max_per_symbol", cfg.PortfolioRisk.MaxPerSymbolExposure).
+		Bool("correlated_check", cfg.PortfolioRisk.EnableCorrelatedCheck).
+		Msg("portfolio monitor initialized")
+
 	// Strategy
-	strat := basistrade.NewStrategy(cfg.Strategy.BasisTrade, exchangeClient, executor, execEngine, cfg.Symbols, store)
+	strat := basistrade.NewStrategy(cfg.Strategy.BasisTrade, exchangeClient, executor, execEngine, cfg.Symbols, store, portfolioMonitor)
 
 	// Block until context cancelled
 	if err := strat.Start(ctx); err != nil {
