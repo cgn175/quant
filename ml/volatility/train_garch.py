@@ -7,8 +7,8 @@ GARCH captures volatility clustering better than simple rolling stats.
 Expected improvement: 15-20% better prediction accuracy.
 
 Usage:
-    python3 ml/volatility/add_garch_feature.py
-    python3 ml/volatility/add_garch_feature.py --symbol BTCUSDT
+    python3 ml/volatility/train_garch.py
+    python3 ml/volatility/train_garch.py --symbol BTCUSDT
 """
 
 import argparse
@@ -31,6 +31,10 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "training.db"
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models" / "vol_garch_v1"
 
+# Fixed window size for training (much faster than expanding window)
+# Using last 500 4H bars = ~83 days of data
+FIXED_WINDOW_SIZE = 500
+
 
 def load_data(symbol: str, db_path: Path) -> pd.DataFrame:
     """Load 4H candles from training.db."""
@@ -50,7 +54,7 @@ def load_data(symbol: str, db_path: Path) -> pd.DataFrame:
 
 
 def train_garch(symbol: str, db_path: Path, model_dir: Path):
-    """Train GARCH(1,1) model for a symbol."""
+    """Train GARCH(1,1) model for a symbol using fixed window approach."""
     print(f"\n{'='*60}")
     print(f"Training GARCH(1,1): {symbol}")
     print(f"{'='*60}")
@@ -66,7 +70,7 @@ def train_garch(symbol: str, db_path: Path, model_dir: Path):
     
     print(f"Train: {len(train_df)} | Test: {len(test_df)}")
     
-    # Train GARCH(1,1) on returns
+    # Train GARCH(1,1) on training data
     print("\nTraining GARCH(1,1)...")
     returns_pct = train_df["returns"] * 100  # GARCH works better with percentage returns
     
@@ -75,23 +79,43 @@ def train_garch(symbol: str, db_path: Path, model_dir: Path):
     
     print(result.summary())
     
-    # Forecast volatility for test period
-    print("\nForecasting test period...")
+    # Fixed-window rolling forecast for test period
+    # MUCH faster than refitting for every point (O(n) vs O(n²))
+    print(f"\nForecasting test period (fixed window={FIXED_WINDOW_SIZE})...")
     forecasts = []
     
-    # Rolling forecast: use all data up to each test point
     for i in range(len(test_df)):
-        # Use all data up to current test point
-        hist_returns = df.iloc[:split_idx + i]["returns"] * 100
+        # Use fixed window of recent data (sliding window)
+        # This is O(1) per iteration instead of O(n)
+        start_idx = max(0, split_idx + i - FIXED_WINDOW_SIZE)
+        end_idx = split_idx + i
         
-        # Fit GARCH on historical data
-        m = arch_model(hist_returns, vol="Garch", p=1, q=1, rescale=False)
-        res = m.fit(disp="off", show_warning=False)
+        hist_returns = df.iloc[start_idx:end_idx]["returns"] * 100
+        
+        # Only refit every 50 points for efficiency (approximate update)
+        # For points in between, use previous forecast
+        if i % 50 == 0 or i == 0:
+            try:
+                m = arch_model(hist_returns, vol="Garch", p=1, q=1, rescale=False)
+                res = m.fit(disp="off", show_warning=False)
+                last_fit_result = res
+            except Exception:
+                # If fit fails, use last successful result
+                pass
         
         # Forecast 1-step ahead
-        forecast = res.forecast(horizon=1)
-        vol_forecast = np.sqrt(forecast.variance.values[-1, 0])
+        if 'last_fit_result' in locals():
+            forecast = last_fit_result.forecast(horizon=1)
+            vol_forecast = np.sqrt(forecast.variance.values[-1, 0])
+        else:
+            # Fallback: use rolling std if GARCH fails
+            vol_forecast = hist_returns.std() * np.sqrt(4)  # Scale to 4H
+        
         forecasts.append(vol_forecast)
+        
+        # Progress indicator
+        if (i + 1) % 100 == 0:
+            print(f"  Processed {i + 1}/{len(test_df)} forecasts...")
     
     # Calculate actual volatility (realized)
     test_df = test_df.copy()
@@ -108,6 +132,10 @@ def train_garch(symbol: str, db_path: Path, model_dir: Path):
     print(f"Mean actual range: {test_df['range_pct'].mean():.4f}%")
     print(f"Mean forecast: {test_df['garch_forecast'].mean():.4f}%")
     
+    # Calculate correlation
+    correlation = np.corrcoef(test_df["range_pct"], test_df["garch_forecast"])[0, 1]
+    print(f"Correlation: {correlation:.4f}")
+    
     # Save model
     model_dir.mkdir(parents=True, exist_ok=True)
     model_path = model_dir / f"{symbol}.pkl"
@@ -115,7 +143,21 @@ def train_garch(symbol: str, db_path: Path, model_dir: Path):
     # Save the fitted result (contains model parameters)
     joblib.dump(result, model_path)
     
+    # Save metadata
+    metadata = {
+        "symbol": symbol,
+        "window_size": FIXED_WINDOW_SIZE,
+        "train_size": len(train_df),
+        "test_size": len(test_df),
+        "mae": float(mae),
+        "rmse": float(rmse),
+        "correlation": float(correlation),
+    }
+    metadata_path = model_dir / f"{symbol}_metadata.pkl"
+    joblib.dump(metadata, metadata_path)
+    
     print(f"\n✓ Saved GARCH model to {model_path}")
+    print(f"✓ Saved metadata to {metadata_path}")
 
 
 def main():
