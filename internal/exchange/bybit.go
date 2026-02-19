@@ -18,12 +18,26 @@ const (
 
 type BybitClient struct {
 	testnet    bool
+	apiKey     string
+	apiSecret  string
 	httpClient *http.Client
 }
 
 func NewBybitClient(testnet bool) *BybitClient {
 	return &BybitClient{
 		testnet: testnet,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
+
+// NewBybitAuthClient creates an authenticated Bybit client
+func NewBybitAuthClient(testnet bool, apiKey, apiSecret string) *BybitClient {
+	return &BybitClient{
+		testnet:   testnet,
+		apiKey:    apiKey,
+		apiSecret: apiSecret,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
