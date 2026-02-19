@@ -669,7 +669,7 @@ def predict(features):
    }
    ```
 
-2. **Stress testing**
+2. **Stress testing** ----> done in STRESS_TEST_RESULT.md
    - Simulate 2020 COVID crash (-50% in 2 days)
    - Simulate 2022 Luna collapse (-90% in 1 day)
    - Simulate 2021 China ban (-30% in 1 week)
