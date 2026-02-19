@@ -46,10 +46,10 @@ def load_data(symbol: str, db_path: Path) -> pd.DataFrame:
     """Load 4H candles from training.db."""
     conn = sqlite3.connect(db_path)
     query = f"""
-        SELECT timestamp, open, high, low, close, volume
-        FROM candles_4h
+        SELECT open_time as timestamp, open, high, low, close, volume
+        FROM candles
         WHERE symbol = '{symbol}'
-        ORDER BY timestamp ASC
+        ORDER BY open_time ASC
     """
     df = pd.read_sql_query(query, conn)
     conn.close()
