@@ -47,10 +47,15 @@ func NewFundingStore(dbPath string) (*FundingStore, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+	// Set busy timeout to handle concurrent access
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
+		return nil, fmt.Errorf("set busy timeout: %w", err)
 	}
+
+	// Try to enable WAL mode, but don't fail if database is locked
+	// (another process may have already set it)
+	_, _ = db.Exec("PRAGMA journal_mode=WAL")
 
 	createSQL := `
 		CREATE TABLE IF NOT EXISTS funding_rates (
