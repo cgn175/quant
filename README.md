@@ -102,6 +102,26 @@ Set `mode: live` in `config.yaml` or pass as env var `QUANT_MODE=live`.
 ./bot --config config.yaml
 ```
 
+### Validation Scripts
+
+**Momentum Filter Validation**:
+```bash
+# Check momentum rankings and filter status
+python3 scripts/validate_momentum.py
+```
+
+**Cross-Exchange Arbitrage Validation**:
+```bash
+# Check funding rate spreads across exchanges
+python3 scripts/validate_cross_exchange.py
+```
+
+**Paper Trading Validation**:
+```bash
+# Analyze paper trading results
+python3 scripts/validate_paper_trading.py --log logs/bot.log
+```
+
 ### Strategy Comparison
 Compare performance across multiple strategies:
 ```bash
@@ -114,7 +134,7 @@ The bot supports a Telegram interface for management:
 - `/status`: View current PnL, open positions, and equity.
 - `/stop`: Gracefully stop the bot (cancel open orders, close positions if configured).
 
-## Pb Architecture
+## 📚 Architecture
 Quant Bot follows a Clean Architecture / Hexagonal pattern:
 - **Domain**: Core entities (`Order`, `Trade`, `Candle`) and interfaces (`Exchange`, `Executor`).
 - **Application**: Strategy logic and Risk Management.

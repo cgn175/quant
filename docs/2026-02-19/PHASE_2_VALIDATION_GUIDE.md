@@ -6,9 +6,53 @@
 
 ---
 
+## Quick Validation
+
+**Run this first**:
+```bash
+# Check momentum rankings
+python3 scripts/validate_momentum.py
+
+# Check bot logs
+grep 'momentum' logs/bot.log | tail -20
+grep 'signal blocked' logs/bot.log | tail -20
+```
+
+**Expected output**:
+```
+✅ Latest Momentum Rankings:
+   1. ETH_USDT: 0.0060
+   2. BTC_USDT: -0.3339
+   3. SOL_USDT: -1.5720
+   4. BNB_USDT: -3.8372
+
+📊 Top 2 symbols (should be trading):
+   ✅ ETH_USDT
+   ✅ BTC_USDT
+
+🚫 Blocked symbols (should NOT trade):
+   ❌ SOL_USDT
+   ❌ BNB_USDT
+```
+
+---
+
 ## What to Monitor
 
-### 1. Prometheus Metrics
+### 1. Momentum Rankings
+
+**Script**: `scripts/validate_momentum.py`
+- Shows current momentum rankings
+- Identifies which symbols should trade
+- Provides validation checklist
+
+**Run daily**:
+```bash
+python3 scripts/calculate_momentum.py  # Update rankings
+python3 scripts/validate_momentum.py   # Validate
+```
+
+### 2. Prometheus Metrics
 
 **Key Metric**: `momentum_filter_blocked_total`
 - Tracks how many signals were blocked by momentum filter
@@ -29,7 +73,7 @@ rate(momentum_filter_blocked_total[1h]) / rate(signals_generated_total[1h])
 momentum_filter_blocked_total{symbol=~".*"}
 ```
 
-### 2. Bot Logs
+### 3. Bot Logs
 
 **What to Look For**:
 ```
@@ -44,7 +88,7 @@ momentum_filter_blocked_total{symbol=~".*"}
 - Only top 2 symbols trade at any time
 - Bottom 2 symbols blocked
 
-### 3. Trade Quality
+### 4. Trade Quality
 
 **Compare vs Baseline** (last 24-48h without momentum):
 
@@ -74,22 +118,44 @@ curl http://localhost:9090/metrics | grep open_positions
 
 ## Validation Checklist
 
+### Day 0 (Before Starting)
+
+- [ ] Run momentum calculation: `python3 scripts/calculate_momentum.py`
+- [ ] Run validation script: `python3 scripts/validate_momentum.py`
+- [ ] Verify top 2 symbols identified correctly
+- [ ] Check config: `momentum_filter.enabled: true`
+- [ ] Start bot: `./bin/bot -c config.trend.yaml`
+
 ### Day 1 (First 24h)
 
 - [ ] Bot starts without errors
+- [ ] Run validation: `python3 scripts/validate_momentum.py`
 - [ ] Momentum scores calculated on each bar
 - [ ] `momentum_filter_blocked_total` metric increments
 - [ ] Only top 2 symbols enter new positions
 - [ ] Bottom 2 symbols blocked (check logs)
 - [ ] No crashes or panics
 
+**Quick check**:
+```bash
+python3 scripts/validate_momentum.py
+grep 'momentum filter blocked' logs/bot.log | wc -l  # Should be > 0
+```
+
 ### Day 2 (24-48h)
 
+- [ ] Run validation: `python3 scripts/validate_momentum.py`
 - [ ] Trade count reduced by ~20-30% vs baseline
 - [ ] Win rate improved by ~1-3%
 - [ ] No unexpected behavior
 - [ ] Momentum rankings rotate correctly
 - [ ] All 4 symbols get chances to trade (over time)
+
+**Quick check**:
+```bash
+python3 scripts/validate_momentum.py
+python3 scripts/validate_paper_trading.py --log logs/bot.log
+```
 
 ### Success Criteria
 
