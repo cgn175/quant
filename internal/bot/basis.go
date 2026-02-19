@@ -36,6 +36,8 @@ func RunBasisTrade(cmd *cobra.Command, cfg *config.Config) error {
 	var executor execution.Executor
 	feePercent := cfg.Execution.FeePercent()
 	if cfg.Mode == "live" {
+		// Basis trade needs spot for one leg, futures for the other
+		// We'll use spot executor here; strategy will handle both legs
 		executor = execution.NewLiveExecutor(cfg.Exchange.APIKey, cfg.Exchange.APISecret, cfg.Exchange.Testnet)
 		log.Info().Msg("using live trading executor")
 	} else {

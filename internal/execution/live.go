@@ -18,13 +18,29 @@ type LiveExecutor struct {
 	apiSecret  string
 	testnet    bool
 	httpClient *http.Client
+	// Market type for routing: "spot" or "futures" (default: "spot")
+	marketType string
 }
 
 func NewLiveExecutor(apiKey, apiSecret string, testnet bool) *LiveExecutor {
 	return &LiveExecutor{
-		apiKey:    apiKey,
-		apiSecret: apiSecret,
-		testnet:   testnet,
+		apiKey:     apiKey,
+		apiSecret:  apiSecret,
+		testnet:    testnet,
+		marketType: "spot", // default to spot for backward compatibility
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
+
+// NewLiveFuturesExecutor creates a LiveExecutor configured for futures perpetual orders.
+func NewLiveFuturesExecutor(apiKey, apiSecret string, testnet bool) *LiveExecutor {
+	return &LiveExecutor{
+		apiKey:     apiKey,
+		apiSecret:  apiSecret,
+		testnet:    testnet,
+		marketType: "futures",
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -32,6 +48,13 @@ func NewLiveExecutor(apiKey, apiSecret string, testnet bool) *LiveExecutor {
 }
 
 func (l *LiveExecutor) baseURL() string {
+	if l.marketType == "futures" {
+		if l.testnet {
+			return "https://testnet.binancefuture.com"
+		}
+		return "https://fapi.binance.com"
+	}
+	// Spot
 	if l.testnet {
 		return "https://testnet.binance.vision"
 	}
@@ -160,7 +183,17 @@ func (l *LiveExecutor) ExecuteMarketOrder(symbol string, side OrderSide, size fl
 	params.Set("type", "MARKET")
 	params.Set("quantity", strconv.FormatFloat(size, 'f', -1, 64))
 
-	body, err := l.doSignedRequest(http.MethodPost, "/api/v3/order", params)
+	// Futures require positionSide parameter for hedge mode
+	if l.marketType == "futures" {
+		params.Set("positionSide", "BOTH") // one-way mode (no hedge)
+	}
+
+	endpoint := "/api/v3/order"
+	if l.marketType == "futures" {
+		endpoint = "/fapi/v1/order"
+	}
+
+	body, err := l.doSignedRequest(http.MethodPost, endpoint, params)
 	if err != nil {
 		return nil, fmt.Errorf("market order failed: %w", err)
 	}
@@ -177,7 +210,16 @@ func (l *LiveExecutor) ExecuteLimitOrder(symbol string, side OrderSide, price, s
 	params.Set("quantity", strconv.FormatFloat(size, 'f', -1, 64))
 	params.Set("price", strconv.FormatFloat(price, 'f', -1, 64))
 
-	body, err := l.doSignedRequest(http.MethodPost, "/api/v3/order", params)
+	if l.marketType == "futures" {
+		params.Set("positionSide", "BOTH")
+	}
+
+	endpoint := "/api/v3/order"
+	if l.marketType == "futures" {
+		endpoint = "/fapi/v1/order"
+	}
+
+	body, err := l.doSignedRequest(http.MethodPost, endpoint, params)
 	if err != nil {
 		return nil, fmt.Errorf("limit order failed: %w", err)
 	}
@@ -190,7 +232,12 @@ func (l *LiveExecutor) CancelOrder(symbol string, orderID string) error {
 	params.Set("symbol", symbol)
 	params.Set("orderId", orderID)
 
-	_, err := l.doSignedRequest(http.MethodDelete, "/api/v3/order", params)
+	endpoint := "/api/v3/order"
+	if l.marketType == "futures" {
+		endpoint = "/fapi/v1/order"
+	}
+
+	_, err := l.doSignedRequest(http.MethodDelete, endpoint, params)
 	if err != nil {
 		return fmt.Errorf("cancel order failed: %w", err)
 	}
@@ -203,7 +250,12 @@ func (l *LiveExecutor) GetOrder(symbol string, orderID string) (*Order, error) {
 	params.Set("symbol", symbol)
 	params.Set("orderId", orderID)
 
-	body, err := l.doSignedRequest(http.MethodGet, "/api/v3/order", params)
+	endpoint := "/api/v3/order"
+	if l.marketType == "futures" {
+		endpoint = "/fapi/v1/order"
+	}
+
+	body, err := l.doSignedRequest(http.MethodGet, endpoint, params)
 	if err != nil {
 		return nil, fmt.Errorf("get order failed: %w", err)
 	}

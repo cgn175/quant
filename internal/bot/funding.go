@@ -36,8 +36,9 @@ func RunFundingArb(cmd *cobra.Command, cfg *config.Config) error {
 	var executor execution.Executor
 	feePercent := cfg.Execution.FeePercent()
 	if cfg.Mode == "live" {
-		executor = execution.NewLiveExecutor(cfg.Exchange.APIKey, cfg.Exchange.APISecret, cfg.Exchange.Testnet)
-		log.Info().Msg("using live trading executor")
+		// Use futures executor for funding arb (perpetual contracts)
+		executor = execution.NewLiveFuturesExecutor(cfg.Exchange.APIKey, cfg.Exchange.APISecret, cfg.Exchange.Testnet)
+		log.Info().Msg("using live futures trading executor")
 	} else {
 		executor = execution.NewPaperExecutor(cfg.Execution.SlippageBP, feePercent)
 		log.Info().Msg("using paper trading executor")
