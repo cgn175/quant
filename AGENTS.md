@@ -2,16 +2,35 @@
 
 ## Project Overview
 
-**Crypto trend-following trading bot** targeting BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT on Binance with 4H candles. Currently in **paper trading mode**.
+**Multi-strategy crypto trading bot** targeting BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT on Binance. Currently in **paper trading mode**.
 
 **Two primary services:**
 1. **Go Trading Bot** — live/paper execution, strategy, risk management, backtesting
 2. **Python ML Microservice** — model training & HTTP inference server (port 9001) for regime and volatility predictions
 
-**Current Strategy: "Plan D" — Pure Trend Following** (mechanical rules, no directional ML prediction):
-- **Layer 1 — Entry signals:** Donchian breakout + EMA(9/21) crossover confirmation + EMA(50) trend + volume confirmation + whipsaw defense (candle color + BB dead market filter)
-- **Layer 2 — Regime filters:** Regime Classifier OR legacy ML OR ADX > 20, volatility (ATR ratio), funding rate filter
-- **Layer 3 — Risk management:** ATR-based initial stops (or Dynamic Stop-Loss), Chandelier trailing exit (dynamic ATR multiplier tightening by R-multiple), partial exits at 3R and 6R, daily loss cap, sector correlation guard
+**Available Strategies:**
+
+1. **"Plan D" — Pure Trend Following** (4H candles, mechanical rules, no directional ML):
+   - **Layer 1 — Entry signals:** Donchian breakout + EMA(9/21) crossover confirmation + EMA(50) trend + volume confirmation + whipsaw defense (candle color + BB dead market filter)
+   - **Layer 2 — Regime filters:** Regime Classifier OR legacy ML OR ADX > 20, volatility (ATR ratio), funding rate filter, OI z-score filter
+   - **Layer 3 — Risk management:** ATR-based initial stops (or Dynamic Stop-Loss), Chandelier trailing exit (dynamic ATR multiplier tightening by R-multiple), partial exits at 3R and 6R, daily loss cap, sector correlation guard
+
+2. **Funding Rate Arbitrage** (delta-neutral carry):
+   - Entry: When funding rate exceeds threshold (e.g., 0.05% per 8h)
+   - Position: SHORT perp + LONG spot (delta-neutral hedge) OR SHORT perp only
+   - Exit: Funding normalizes, flips against us, or max loss breach
+   - Target: 15-30% APY from funding payments
+
+3. **Perpetual Basis Trade** (cash-and-carry):
+   - Entry: When annualized basis (perp premium over spot) exceeds threshold (e.g., 15%)
+   - Position: LONG spot + SHORT perp (delta-neutral)
+   - Exit: Basis converges below threshold
+   - Target: Capture basis convergence + funding payments
+
+4. **Market Making** (pure liquidity provision):
+   - Place bid/ask orders around mid-price with dynamic spread (volatility-adjusted)
+   - Inventory risk management via Avellaneda-Stoikov skewing
+   - Target: Earn spread, not directional profit
 
 **ML Status:** The v1 XGBoost directional model is **disabled** (severely overfit: Train AUC 0.96 vs Test AUC 0.57). Two new anti-overfit models have been built to replace it:
 - **Regime Classifier (Traffic Light):** RandomForest that learns WHEN to trade (SAFE_TO_TRADE vs DANGER_ZONE) based on entry outcomes. 6 features, max_depth=4. Replaces ADX > 20 rule.
@@ -47,7 +66,13 @@ quant/
 │   │   ├── trend_vol_features.go       # BuildVolatilityFeatures() — 6 features for Dynamic Stop
 │   │   ├── trend_ml_features.go        # BuildMLFeatures() — 19 features for legacy v1 (disabled)
 │   │   ├── signal.go                   # Signal types, legacy Evaluate() for old ML strategy
-│   │   └── trend_test.go              # Strategy unit tests
+│   │   ├── trend_test.go              # Strategy unit tests
+│   │   ├── funding_arb/                # Funding rate arbitrage strategy
+│   │   │   └── strategy.go             # FundingArbStrategy: scan funding rates, open/close delta-neutral positions
+│   │   ├── basis_trade/                # Perpetual basis trade strategy
+│   │   │   └── strategy.go             # BasisTradeStrategy: monitor basis, open/close spot+perp pairs
+│   │   └── market_making/              # Pure market making strategy
+│   │       └── strategy.go             # MarketMakingStrategy: bid/ask spread, inventory management
 │   ├── mlfilter/                       # ML inference HTTP client
 │   │   ├── client.go                   # Predict(), PredictRegime(), PredictVolatility()
 │   │   └── circuit_breaker.go          # Circuit breaker for ML service failures
@@ -57,7 +82,8 @@ quant/
 │   ├── data/                           # Data persistence
 │   │   ├── store.go                    # CandleStore interface
 │   │   ├── sqlite_store.go             # SQLite implementation (candles.db)
-│   │   └── funding.go                  # FundingCache — in-memory funding rate cache
+│   │   ├── funding.go                  # FundingCache — in-memory funding rate cache
+│   │   └── funding_store.go            # FundingStore — SQLite persistence for arb positions + funding rates
 │   ├── features/                       # Technical indicator calculations (Go)
 │   │   ├── indicators.go               # EMA, RSI, ATR, ADX, Bollinger, Donchian, VolumeRatio, etc.
 │   │   ├── builder.go                  # FeatureVector builder (5m)
@@ -65,8 +91,14 @@ quant/
 │   ├── execution/                      # Order execution
 │   │   ├── engine.go                   # ExecutionEngine interface
 │   │   ├── paper.go                    # Paper trading engine (simulated fills)
-│   │   └── live.go                     # Live Binance execution
+│   │   └── live.go                     # Live Binance execution (spot + futures)
 │   ├── risk/manager.go                 # Position sizing, leverage limits
+│   ├── bot/                            # Bot runner entry points
+│   │   ├── trend.go                    # RunTrendFollowing() — orchestrates trend strategy
+│   │   ├── funding.go                  # RunFundingArb() — orchestrates funding arb strategy
+│   │   ├── basis.go                    # RunBasisTrade() — orchestrates basis trade strategy
+│   │   ├── mm.go                       # RunMarketMaking() — orchestrates market making strategy
+│   │   └── common.go                   # Shared setup (exchange client, context, stats)
 │   ├── backtest/                       # Offline backtester
 │   │   ├── engine.go                   # Backtest loop
 │   │   ├── loader.go                   # Load historical data
@@ -98,6 +130,7 @@ quant/
 │   ├── fetch_data.py                   # Download historical data
 │   ├── ingest_4h_to_sqlite.py          # Ingest 4H candles → training.db
 │   ├── backtest_trend.py               # Python-side trend backtest
+│   ├── backtest_momentum.py            # Cross-sectional momentum backtest
 │   ├── walk_forward_trend.py           # Walk-forward validation
 │   ├── train_model.py                  # Original training script
 │   └── ...                             # Various research notebooks/scripts
@@ -114,8 +147,12 @@ quant/
 │   ├── PLAN_D_IMPLEMENTATION.md        # Current strategy design doc
 │   └── ...
 │
-├── config.yaml                         # ** Active configuration — all tunables live here **
-├── config.yaml.example                 # Template
+├── config.trend.yaml                   # Trend-following strategy config
+├── config.funding.yaml                 # Funding arbitrage strategy config
+├── config.mm.yaml                      # Market making strategy config
+├── config.example.trend.yaml           # Templates
+├── config.example.funding.yaml
+├── config.example.mm.yaml
 ├── docker-compose.yaml                 # Bot + ML server + sentiment
 ├── Dockerfile.bot                      # Go bot container
 ├── go.mod / go.sum                     # Go dependencies
@@ -138,18 +175,15 @@ Binance WS → candles → SQLite → OnBar() → Layer 1 (entry signal?) → La
 
 ---
 
-## Configuration Quick Reference (`config.yaml`)
+## Configuration Quick Reference
 
-| Section | Key settings |
-|---------|-------------|
-| `strategy.type` | `trend_following` (active) |
-| `strategy.regime_filter.enabled` | `false` — set `true` to use Traffic Light |
-| `strategy.dynamic_stop.enabled` | `false` — set `true` to use ML dynamic stops |
-| `strategy.ml_filter.enabled` | `false` — legacy v1 XGBoost (keep disabled) |
-| `risk.max_risk_per_trade_pct` | `1.0` (1% per trade) |
-| `risk.max_daily_loss_pct` | `3.0` (3% daily cap) |
-| `risk.max_open_positions` | `4` |
-| `mode` | `paper` (never change to `live` without explicit instruction) |
+| Strategy | Config file | Key settings |
+|----------|-------------|-------------|
+| **Trend Following** | `config.trend.yaml` | `strategy.type: trend_following`<br>`strategy.regime_filter.enabled: false` (Traffic Light)<br>`strategy.dynamic_stop.enabled: false` (ML stops)<br>`risk.max_risk_per_trade_pct: 1.0` |
+| **Funding Arb** | `config.funding.yaml` | `strategy.type: funding_arb`<br>`strategy.funding_arb.min_funding_rate: 0.0005`<br>`strategy.funding_arb.delta_neutral: true`<br>`strategy.funding_arb.db_path: funding.db` |
+| **Basis Trade** | `config.basis.yaml` | `strategy.type: basis_trade`<br>`strategy.basis_trade.min_basis_annualized: 0.15`<br>`strategy.basis_trade.exit_basis: 0.05` |
+| **Market Making** | `config.mm.yaml` | `strategy.type: market_making`<br>`strategy.market_making.spread_pct: 0.005`<br>`strategy.market_making.gamma: 0.1` |
+| **Global** | All configs | `mode: paper` ⚠️ never change to `live` without explicit instruction |
 
 ---
 
