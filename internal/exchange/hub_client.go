@@ -15,6 +15,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	binanceSpotBaseURL        = "https://api.binance.com"
+	binanceSpotTestnetBaseURL = "https://testnet.binance.vision"
+)
+
 // HubClient implements the Client interface by connecting to a local WS hub
 // that multiplexes Binance market data, instead of connecting directly to Binance.
 type HubClient struct {
@@ -311,9 +316,41 @@ func (c *HubClient) Close() error {
 	return nil
 }
 
-// FetchSpotPrice is not supported via the hub; returns an error.
+// FetchSpotPrice fetches spot price via REST API (not via hub WebSocket)
 func (c *HubClient) FetchSpotPrice(symbol string) (float64, error) {
-	return 0, fmt.Errorf("not implemented via hub")
+	url := fmt.Sprintf("%s/api/v3/ticker/price?symbol=%s", c.spotBaseURL(), symbol)
+	
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("spot price request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("spot price API error: status=%d", resp.StatusCode)
+	}
+
+	var result struct {
+		Symbol string `json:"symbol"`
+		Price  string `json:"price"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, fmt.Errorf("spot price parse failed: %w", err)
+	}
+
+	price, err := strconv.ParseFloat(result.Price, 64)
+	if err != nil {
+		return 0, fmt.Errorf("spot price parse float failed: %w", err)
+	}
+
+	return price, nil
+}
+
+func (c *HubClient) spotBaseURL() string {
+	if c.testnet {
+		return binanceSpotTestnetBaseURL
+	}
+	return binanceSpotBaseURL
 }
 
 // ---------------------------------------------------------------------------
