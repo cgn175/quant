@@ -24,10 +24,15 @@ type CrossExchangeBasisManager struct {
 }
 
 // NewCrossExchangeBasisManager creates a new cross-exchange basis manager
-func NewCrossExchangeBasisManager(exchanges map[string]exchange.CrossExchangeClient) *CrossExchangeBasisManager {
+func NewCrossExchangeBasisManager() *CrossExchangeBasisManager {
 	return &CrossExchangeBasisManager{
-		exchanges: exchanges,
+		exchanges: make(map[string]exchange.CrossExchangeClient),
 	}
+}
+
+// AddExchange adds an exchange client to the manager
+func (m *CrossExchangeBasisManager) AddExchange(name string, client exchange.CrossExchangeClient) {
+	m.exchanges[name] = client
 }
 
 // ScanOpportunities finds the best basis opportunity for a symbol across exchanges

@@ -1,6 +1,10 @@
 package exchange
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,11 +20,25 @@ const (
 )
 
 type OKXClient struct {
+	apiKey     string
+	apiSecret  string
+	passphrase string
 	httpClient *http.Client
 }
 
 func NewOKXClient() *OKXClient {
 	return &OKXClient{
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
+
+func NewOKXAuthClient(apiKey, apiSecret, passphrase string) *OKXClient {
+	return &OKXClient{
+		apiKey:     apiKey,
+		apiSecret:  apiSecret,
+		passphrase: passphrase,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -227,10 +245,70 @@ func (c *OKXClient) GetOrderBook(symbol string) (*OrderBook, error) {
 	return ob, nil
 }
 
-// PlaceOrder is a placeholder for order execution - would need API keys and signing
+func (c *OKXClient) sign(timestamp, method, path, body string) string {
+	message := timestamp + method + path + body
+	h := hmac.New(sha256.New, []byte(c.apiSecret))
+	h.Write([]byte(message))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
 func (c *OKXClient) PlaceOrder(symbol, side string, quantity, price float64) error {
-	log.Warn().Str("exchange", "okx").Msg("PlaceOrder not implemented - requires API keys and signing")
-	return fmt.Errorf("okx order placement not implemented")
+	if c.apiKey == "" || c.apiSecret == "" {
+		return fmt.Errorf("okx authentication not configured")
+	}
+
+	timestamp := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	path := "/api/v5/trade/order"
+
+	okxSymbol := convertToOKXSymbol(symbol)
+	okxSide := "buy"
+	if side == "Sell" {
+		okxSide = "sell"
+	}
+
+	orderReq := map[string]interface{}{
+		"instId":  okxSymbol,
+		"tdMode":  "cross",
+		"side":    okxSide,
+		"ordType": "market",
+		"sz":      fmt.Sprintf("%.0f", quantity),
+	}
+
+	bodyBytes, _ := json.Marshal(orderReq)
+	signature := c.sign(timestamp, "POST", path, string(bodyBytes))
+
+	req, _ := http.NewRequest("POST", okxBaseURL+path, bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("OK-ACCESS-KEY", c.apiKey)
+	req.Header.Set("OK-ACCESS-SIGN", signature)
+	req.Header.Set("OK-ACCESS-TIMESTAMP", timestamp)
+	req.Header.Set("OK-ACCESS-PASSPHRASE", c.passphrase)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("okx order request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("okx order failed: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Code string `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("okx order parse failed: %w", err)
+	}
+
+	if result.Code != "0" {
+		return fmt.Errorf("okx order error: %s", result.Msg)
+	}
+
+	log.Info().Str("exchange", "okx").Str("symbol", symbol).Str("side", side).Float64("qty", quantity).Msg("Order placed")
+	return nil
 }
 
 func (c *OKXClient) Close() error {

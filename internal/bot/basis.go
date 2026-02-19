@@ -92,7 +92,7 @@ func RunBasisTrade(cmd *cobra.Command, cfg *config.Config) error {
 		Msg("portfolio monitor initialized")
 
 	// Strategy
-	strat := basistrade.NewStrategy(cfg.Strategy.BasisTrade, exchangeClient, executor, execEngine, cfg.Symbols, store, portfolioMonitor)
+	strat := basistrade.NewStrategy(cfg.Strategy.BasisTrade, cfg.Exchange, exchangeClient, executor, execEngine, cfg.Symbols, store, portfolioMonitor)
 
 	// Block until context cancelled
 	if err := strat.Start(ctx); err != nil {

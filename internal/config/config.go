@@ -32,6 +32,14 @@ type ExchangeConfig struct {
 	// HubURL is the WebSocket URL of the central WS hub (e.g. "localhost:9090").
 	// All bots connect to the hub which maintains a single Binance WS connection.
 	HubURL string `mapstructure:"hub_url"`
+
+	// Multi-exchange credentials for cross-exchange arbitrage
+	BybitAPIKey      string `mapstructure:"bybit_api_key"`
+	BybitAPISecret   string `mapstructure:"bybit_api_secret"`
+	BybitTestnet     bool   `mapstructure:"bybit_testnet"`
+	OKXAPIKey        string `mapstructure:"okx_api_key"`
+	OKXAPISecret     string `mapstructure:"okx_api_secret"`
+	OKXPassphrase    string `mapstructure:"okx_passphrase"`
 }
 
 type SentimentConfig struct {

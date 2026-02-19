@@ -1,6 +1,10 @@
 package exchange
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -245,10 +249,64 @@ func (c *BybitClient) GetOrderBook(symbol string) (*OrderBook, error) {
 	return ob, nil
 }
 
-// PlaceOrder is a placeholder for order execution - would need API keys and signing
+func (c *BybitClient) sign(timestamp, recvWindow, params string) string {
+	message := timestamp + c.apiKey + recvWindow + params
+	h := hmac.New(sha256.New, []byte(c.apiSecret))
+	h.Write([]byte(message))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func (c *BybitClient) PlaceOrder(symbol, side string, quantity, price float64) error {
-	log.Warn().Str("exchange", "bybit").Msg("PlaceOrder not implemented - requires API keys and signing")
-	return fmt.Errorf("bybit order placement not implemented")
+	if c.apiKey == "" || c.apiSecret == "" {
+		return fmt.Errorf("bybit authentication not configured")
+	}
+
+	timestamp := fmt.Sprintf("%d", time.Now().UnixMilli())
+	recvWindow := "5000"
+
+	orderReq := map[string]interface{}{
+		"category":  "linear",
+		"symbol":    symbol,
+		"side":      side,
+		"orderType": "Market",
+		"qty":       fmt.Sprintf("%.4f", quantity),
+	}
+
+	bodyBytes, _ := json.Marshal(orderReq)
+	signature := c.sign(timestamp, recvWindow, string(bodyBytes))
+
+	req, _ := http.NewRequest("POST", c.baseURL()+"/v5/order/create", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-BAPI-API-KEY", c.apiKey)
+	req.Header.Set("X-BAPI-TIMESTAMP", timestamp)
+	req.Header.Set("X-BAPI-SIGN", signature)
+	req.Header.Set("X-BAPI-RECV-WINDOW", recvWindow)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("bybit order request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bybit order failed: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		RetCode int    `json:"retCode"`
+		RetMsg  string `json:"retMsg"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("bybit order parse failed: %w", err)
+	}
+
+	if result.RetCode != 0 {
+		return fmt.Errorf("bybit order error: %s", result.RetMsg)
+	}
+
+	log.Info().Str("exchange", "bybit").Str("symbol", symbol).Str("side", side).Float64("qty", quantity).Msg("Order placed")
+	return nil
 }
 
 func (c *BybitClient) Close() error {

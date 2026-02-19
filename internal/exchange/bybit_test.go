@@ -41,12 +41,16 @@ func TestBybitClient_BaseURL(t *testing.T) {
 }
 
 func TestBybitClient_PlaceOrder(t *testing.T) {
+	// Test unauthenticated client
 	client := NewBybitClient(false)
-	
-	// Should return error as it's not implemented
-	err := client.PlaceOrder("BTCUSDT", "BUY", 0.01, 50000)
+	err := client.PlaceOrder("BTCUSDT", "Buy", 0.01, 50000)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not implemented")
+	assert.Contains(t, err.Error(), "authentication not configured")
+	
+	// Test authenticated client (will fail without real API keys)
+	authClient := NewBybitAuthClient(true, "test_key", "test_secret")
+	err = authClient.PlaceOrder("BTCUSDT", "Buy", 0.01, 50000)
+	assert.Error(t, err) // Will fail due to invalid credentials
 }
 
 func TestBybitClient_Close(t *testing.T) {

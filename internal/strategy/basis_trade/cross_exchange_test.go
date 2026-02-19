@@ -89,7 +89,10 @@ func TestCrossExchangeBasisManager_ScanOpportunities(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := NewCrossExchangeBasisManager(tt.exchanges)
+			manager := NewCrossExchangeBasisManager()
+			for name, client := range tt.exchanges {
+				manager.AddExchange(name, client)
+			}
 			opp, err := manager.ScanOpportunities("BTCUSDT", tt.minBasisAnnualized)
 
 			if tt.wantOpportunity {

@@ -62,7 +62,7 @@ type arbPosition struct {
 	LowFundingRate   float64 // funding rate on low exchange
 }
 
-func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore, portfolioMonitor *risk.PortfolioMonitor) *Strategy {
+func NewStrategy(cfg config.FundingArbConfig, exchangeCfg config.ExchangeConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore, portfolioMonitor *risk.PortfolioMonitor) *Strategy {
 	s := &Strategy{
 		cfg:              cfg,
 		client:           client,
@@ -83,17 +83,27 @@ func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor e
 		for _, exchangeName := range cfg.Exchanges {
 			switch exchangeName {
 			case "binance":
-				// Use existing binance client (would need to wrap it)
 				log.Info().Str("exchange", "binance").Msg("binance client already available")
 			case "bybit":
-				testnet := cfg.ExchangeTestnet["bybit"]
-				bybitClient := exchange.NewBybitClient(testnet)
+				var bybitClient exchange.CrossExchangeClient
+				if exchangeCfg.BybitAPIKey != "" && exchangeCfg.BybitAPISecret != "" {
+					bybitClient = exchange.NewBybitAuthClient(exchangeCfg.BybitTestnet, exchangeCfg.BybitAPIKey, exchangeCfg.BybitAPISecret)
+					log.Info().Str("exchange", "bybit").Bool("authenticated", true).Msg("added authenticated bybit client")
+				} else {
+					bybitClient = exchange.NewBybitClient(exchangeCfg.BybitTestnet)
+					log.Info().Str("exchange", "bybit").Bool("authenticated", false).Msg("added read-only bybit client")
+				}
 				s.crossExchangeManager.AddExchange("bybit", bybitClient)
-				log.Info().Str("exchange", "bybit").Bool("testnet", testnet).Msg("added bybit client")
 			case "okx":
-				okxClient := exchange.NewOKXClient()
+				var okxClient exchange.CrossExchangeClient
+				if exchangeCfg.OKXAPIKey != "" && exchangeCfg.OKXAPISecret != "" {
+					okxClient = exchange.NewOKXAuthClient(exchangeCfg.OKXAPIKey, exchangeCfg.OKXAPISecret, exchangeCfg.OKXPassphrase)
+					log.Info().Str("exchange", "okx").Bool("authenticated", true).Msg("added authenticated okx client")
+				} else {
+					okxClient = exchange.NewOKXClient()
+					log.Info().Str("exchange", "okx").Bool("authenticated", false).Msg("added read-only okx client")
+				}
 				s.crossExchangeManager.AddExchange("okx", okxClient)
-				log.Info().Str("exchange", "okx").Msg("added okx client")
 			}
 		}
 	}

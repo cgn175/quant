@@ -91,7 +91,7 @@ func RunFundingArb(cmd *cobra.Command, cfg *config.Config) error {
 		Msg("portfolio monitor initialized")
 
 	// Strategy
-	strat := fundingarb.NewStrategy(cfg.Strategy.FundingArb, exchangeClient, executor, execEngine, cfg.Symbols, fundingStore, portfolioMonitor)
+	strat := fundingarb.NewStrategy(cfg.Strategy.FundingArb, cfg.Exchange, exchangeClient, executor, execEngine, cfg.Symbols, fundingStore, portfolioMonitor)
 
 	// Block until context cancelled
 	if err := strat.Start(ctx); err != nil {

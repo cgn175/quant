@@ -16,12 +16,16 @@ func TestOKXClient_Creation(t *testing.T) {
 }
 
 func TestOKXClient_PlaceOrder(t *testing.T) {
+	// Test unauthenticated client
 	client := NewOKXClient()
-	
-	// Should return error as it's not implemented
-	err := client.PlaceOrder("BTCUSDT", "BUY", 0.01, 50000)
+	err := client.PlaceOrder("BTCUSDT", "buy", 1, 50000)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not implemented")
+	assert.Contains(t, err.Error(), "authentication not configured")
+	
+	// Test authenticated client (will fail without real API keys)
+	authClient := NewOKXAuthClient("test_key", "test_secret", "test_pass")
+	err = authClient.PlaceOrder("BTCUSDT", "buy", 1, 50000)
+	assert.Error(t, err) // Will fail due to invalid credentials
 }
 
 func TestOKXClient_Close(t *testing.T) {

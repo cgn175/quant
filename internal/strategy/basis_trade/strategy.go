@@ -32,6 +32,8 @@ type Strategy struct {
 
 	mu        sync.RWMutex
 	positions map[string]*basisPosition
+	
+	crossExchangeManager *CrossExchangeBasisManager
 }
 
 // basisPosition tracks an active basis trade.
@@ -46,8 +48,8 @@ type basisPosition struct {
 	EntryTime      time.Time
 }
 
-func NewStrategy(cfg config.BasisTradeConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore, portfolioMonitor *risk.PortfolioMonitor) *Strategy {
-	return &Strategy{
+func NewStrategy(cfg config.BasisTradeConfig, exchangeCfg config.ExchangeConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore, portfolioMonitor *risk.PortfolioMonitor) *Strategy {
+	s := &Strategy{
 		cfg:              cfg,
 		client:           client,
 		executor:         executor,
@@ -57,6 +59,40 @@ func NewStrategy(cfg config.BasisTradeConfig, client exchange.Client, executor e
 		portfolioMonitor: portfolioMonitor,
 		positions:        make(map[string]*basisPosition),
 	}
+
+	// Initialize cross-exchange manager if enabled
+	if cfg.CrossExchange {
+		s.crossExchangeManager = NewCrossExchangeBasisManager()
+		
+		for _, exchangeName := range cfg.Exchanges {
+			switch exchangeName {
+			case "binance":
+				log.Info().Str("exchange", "binance").Msg("binance client already available")
+			case "bybit":
+				var bybitClient exchange.CrossExchangeClient
+				if exchangeCfg.BybitAPIKey != "" && exchangeCfg.BybitAPISecret != "" {
+					bybitClient = exchange.NewBybitAuthClient(exchangeCfg.BybitTestnet, exchangeCfg.BybitAPIKey, exchangeCfg.BybitAPISecret)
+					log.Info().Str("exchange", "bybit").Bool("authenticated", true).Msg("added authenticated bybit client")
+				} else {
+					bybitClient = exchange.NewBybitClient(exchangeCfg.BybitTestnet)
+					log.Info().Str("exchange", "bybit").Bool("authenticated", false).Msg("added read-only bybit client")
+				}
+				s.crossExchangeManager.AddExchange("bybit", bybitClient)
+			case "okx":
+				var okxClient exchange.CrossExchangeClient
+				if exchangeCfg.OKXAPIKey != "" && exchangeCfg.OKXAPISecret != "" {
+					okxClient = exchange.NewOKXAuthClient(exchangeCfg.OKXAPIKey, exchangeCfg.OKXAPISecret, exchangeCfg.OKXPassphrase)
+					log.Info().Str("exchange", "okx").Bool("authenticated", true).Msg("added authenticated okx client")
+				} else {
+					okxClient = exchange.NewOKXClient()
+					log.Info().Str("exchange", "okx").Bool("authenticated", false).Msg("added read-only okx client")
+				}
+				s.crossExchangeManager.AddExchange("okx", okxClient)
+			}
+		}
+	}
+
+	return s
 }
 
 func (s *Strategy) Start(ctx context.Context) error {
