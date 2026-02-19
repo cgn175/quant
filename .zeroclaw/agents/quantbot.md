@@ -413,6 +413,43 @@ When completing work or handing off to another agent:
 
 ---
 
+## Communication Channel
+
+**Method**: ZeroClaw Channel System  
+**Channel**: Use configured channel from ZeroClaw config  
+
+**Reporting Policy**:
+- Report after completing each phase
+- Report after completing each issue (when using beads)
+- Report on errors or blockers
+- Report final results with metrics
+
+**Message Format**:
+```
+✅ [Phase/Issue] Complete: <title>
+
+Summary:
+<1-2 sentence summary>
+
+Changes:
+• File 1: <description>
+• File 2: <description>
+
+Metrics (if applicable):
+• Metric 1: <value>
+• Metric 2: <value>
+
+Next Action:
+<what's next>
+```
+
+**Integration**:
+- Use ZeroClaw's channel system (Telegram/Discord/Slack/etc)
+- Messages sent via configured channel in `~/.zeroclaw/config.toml`
+- Respects channel allowlists and security policies
+
+---
+
 ## Version History
 
 - **1.0** (2026-02-19): Initial ZeroClaw agent configuration
