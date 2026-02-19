@@ -1,266 +1,319 @@
 #!/usr/bin/env python3
-"""
-Cross-sectional crypto momentum backtest with walk-forward validation.
+"""Backtest trend following strategy WITH cross-sectional momentum filter.
 
-Strategy: Rank coins by past N-bar return, long top quartile, short bottom quartile.
-Rebalance weekly. Walk-forward validation with 6mo train / 3mo test windows.
-
-Usage:
-    python scripts/backtest_momentum.py [--data-dir data/momentum] [--output results.csv]
+Compares performance vs baseline (no momentum filter).
 """
 
-import os
-import argparse
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple
+from pathlib import Path
+import sys
+
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent))
+from calculate_momentum import calculate_momentum, SYMBOLS, DATA_DIR
+
+LOOKBACK_DAYS = 21
+TOP_PCT = 0.5  # Trade top 50%
 
 
-def load_data(data_dir: str) -> Dict[str, pd.DataFrame]:
-    """Load all CSV files from data directory."""
+def load_all_data():
+    """Load data for all symbols."""
     data = {}
-    for fname in os.listdir(data_dir):
-        if fname.endswith("_4h.csv"):
-            symbol = fname.replace("_4h.csv", "")
-            df = pd.read_csv(os.path.join(data_dir, fname))
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-            df.set_index("timestamp", inplace=True)
-            df.sort_index(inplace=True)
-            data[symbol] = df
+    for symbol in SYMBOLS:
+        file_path = DATA_DIR / f"{symbol}_4h_2190d.parquet"
+        df = pd.read_parquet(file_path)
+        if df.index.name == 'timestamp':
+            df = df.reset_index()
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        data[symbol] = df
     return data
 
 
-def align_data(data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Align all symbols to a common index, using close prices."""
-    closes = pd.DataFrame({sym: df["close"] for sym, df in data.items()})
-    closes = closes.dropna(how="all")  # Drop rows where all NaN
-    return closes
-
-
-def calculate_returns(closes: pd.DataFrame, lookback: int) -> pd.DataFrame:
-    """Calculate lookback-period returns."""
-    return closes.pct_change(lookback)
-
-
-def rank_signals(returns: pd.DataFrame) -> pd.DataFrame:
-    """Rank symbols cross-sectionally (1 = best, N = worst)."""
-    return returns.rank(axis=1, ascending=False)
-
-
-def backtest_momentum(
-    closes: pd.DataFrame,
-    lookback: int,
-    rebalance_freq: int = 42,  # ~weekly at 4H bars
-    top_pct: float = 0.25,
-    cost_bps: float = 10,  # 10bps per side
-) -> pd.Series:
-    """
-    Run momentum backtest.
+def get_momentum_ranks(data, idx):
+    """Get momentum ranks at a specific index."""
+    scores = []
     
-    Long top quartile, short bottom quartile, equal-weight.
-    Returns a series of portfolio returns.
-    """
-    returns = closes.pct_change()
-    mom_returns = calculate_returns(closes, lookback)
-    
-    n_symbols = closes.shape[1]
-    n_long = max(1, int(n_symbols * top_pct))
-    n_short = n_long
-    
-    portfolio_returns = []
-    weights = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
-    last_rebalance = 0
-    
-    for i in range(lookback + 1, len(closes)):
-        if (i - lookback - 1) % rebalance_freq == 0:
-            # Rebalance
-            ranks = mom_returns.iloc[i - 1].rank(ascending=False)
-            valid = ranks.dropna()
-            
-            if len(valid) < n_long + n_short:
-                continue
-            
-            # Long top, short bottom
-            longs = valid.nsmallest(n_long).index  # smallest rank = highest return
-            shorts = valid.nlargest(n_short).index  # largest rank = lowest return
-            
-            new_weights = pd.Series(0.0, index=closes.columns)
-            new_weights[longs] = 1.0 / n_long
-            new_weights[shorts] = -1.0 / n_short
-            
-            # Apply transaction costs
-            turnover = (new_weights - weights.iloc[i - 1]).abs().sum()
-            cost = turnover * (cost_bps / 10000)
-            
-            weights.iloc[i] = new_weights
-            last_rebalance = i
-        else:
-            weights.iloc[i] = weights.iloc[i - 1]
-        
-        # Portfolio return
-        daily_ret = (weights.iloc[i] * returns.iloc[i]).sum()
-        
-        # Subtract cost only on rebalance days
-        if (i - lookback - 1) % rebalance_freq == 0:
-            turnover = (weights.iloc[i] - weights.iloc[i - 1]).abs().sum()
-            daily_ret -= turnover * (cost_bps / 10000)
-        
-        portfolio_returns.append(daily_ret)
-    
-    return pd.Series(portfolio_returns, index=closes.index[lookback + 1:])
-
-
-def calculate_sharpe(returns: pd.Series, bars_per_year: float = 365 * 6) -> float:
-    """Calculate annualized Sharpe ratio."""
-    if len(returns) < 10 or returns.std() == 0:
-        return 0.0
-    return returns.mean() / returns.std() * np.sqrt(bars_per_year)
-
-
-def walk_forward_backtest(
-    closes: pd.DataFrame,
-    train_bars: int = 1095,  # ~6 months at 4H
-    test_bars: int = 547,    # ~3 months
-    step_bars: int = 182,    # ~1 month
-    lookback_grid: List[int] = None,
-) -> List[Dict]:
-    """
-    Walk-forward validation.
-    
-    On each training window, optimize lookback.
-    On test window, use best lookback and record performance.
-    """
-    if lookback_grid is None:
-        lookback_grid = [12, 24, 42, 84, 168]
-    
-    results = []
-    total_bars = len(closes)
-    
-    i = 0
-    while i + train_bars + test_bars <= total_bars:
-        train_start = i
-        train_end = i + train_bars
-        test_start = train_end
-        test_end = test_start + test_bars
-        
-        train_data = closes.iloc[train_start:train_end]
-        test_data = closes.iloc[test_start:test_end]
-        
-        # Optimize on training
-        best_lookback = lookback_grid[0]
-        best_train_sharpe = -999
-        
-        for lb in lookback_grid:
-            if lb >= len(train_data) - 50:
-                continue
-            train_returns = backtest_momentum(train_data, lb)
-            sharpe = calculate_sharpe(train_returns)
-            if sharpe > best_train_sharpe:
-                best_train_sharpe = sharpe
-                best_lookback = lb
-        
-        # Test with best lookback
-        if best_lookback >= len(test_data) - 50:
-            i += step_bars
+    for symbol in SYMBOLS:
+        df = data[symbol]
+        if idx < LOOKBACK_DAYS:
+            scores.append({'symbol': symbol, 'score': 0.0})
             continue
         
-        test_returns = backtest_momentum(test_data, best_lookback)
-        test_sharpe = calculate_sharpe(test_returns)
+        # Get data up to current index
+        recent = df.iloc[max(0, idx-LOOKBACK_DAYS):idx]
+        score = calculate_momentum(recent, LOOKBACK_DAYS)
+        scores.append({'symbol': symbol, 'score': score})
+    
+    # Sort by score descending
+    scores = sorted(scores, key=lambda x: x['score'], reverse=True)
+    
+    # Assign ranks
+    ranks = {}
+    for i, item in enumerate(scores):
+        ranks[item['symbol']] = i + 1
+    
+    return ranks
+
+
+def is_top_momentum(symbol, ranks):
+    """Check if symbol is in top N%."""
+    rank = ranks.get(symbol, len(SYMBOLS))
+    top_n = int(len(SYMBOLS) * TOP_PCT)
+    if top_n < 1:
+        top_n = 1
+    return rank <= top_n
+
+
+def simple_trend_signal(df, idx):
+    """Simple trend signal: price > 50 EMA."""
+    if idx < 50:
+        return None
+    
+    ema50 = df['close'].iloc[max(0, idx-50):idx].mean()
+    current_price = df.iloc[idx]['close']
+    
+    if current_price > ema50:
+        return 'LONG'
+    elif current_price < ema50:
+        return 'SHORT'
+    return None
+
+
+def backtest_with_momentum():
+    """Backtest with momentum filter."""
+    print("Loading data...")
+    data = load_all_data()
+    
+    # Find common date range
+    min_len = min(len(df) for df in data.values())
+    
+    equity = 10000
+    trades = []
+    positions = {}  # symbol -> {'side', 'entry_price', 'entry_idx'}
+    
+    print(f"Backtesting {min_len} candles with momentum filter...")
+    
+    for idx in range(50, min_len):  # Start after EMA50 warmup
+        # Get momentum ranks
+        ranks = get_momentum_ranks(data, idx)
         
-        results.append({
-            "train_start": closes.index[train_start],
-            "train_end": closes.index[train_end - 1],
-            "test_start": closes.index[test_start],
-            "test_end": closes.index[test_end - 1],
-            "best_lookback": best_lookback,
-            "train_sharpe": best_train_sharpe,
-            "test_sharpe": test_sharpe,
-            "n_test_bars": len(test_returns),
+        # Check each symbol
+        for symbol in SYMBOLS:
+            df = data[symbol]
+            
+            # Skip if already in position
+            if symbol in positions:
+                # Check exit (simple: opposite signal or 3% stop)
+                pos = positions[symbol]
+                current_price = df.iloc[idx]['close']
+                pnl_pct = (current_price - pos['entry_price']) / pos['entry_price']
+                if pos['side'] == 'SHORT':
+                    pnl_pct = -pnl_pct
+                
+                # Exit on stop loss or opposite signal
+                signal = simple_trend_signal(df, idx)
+                if pnl_pct < -0.03 or (signal and signal != pos['side']):
+                    # Close position
+                    equity *= (1 + pnl_pct * 0.01)  # 1% risk per trade
+                    trades.append({
+                        'symbol': symbol,
+                        'entry_idx': pos['entry_idx'],
+                        'exit_idx': idx,
+                        'side': pos['side'],
+                        'pnl_pct': pnl_pct,
+                        'win': pnl_pct > 0
+                    })
+                    del positions[symbol]
+                continue
+            
+            # Check entry signal
+            signal = simple_trend_signal(df, idx)
+            if not signal:
+                continue
+            
+            # MOMENTUM FILTER: Only trade if in top momentum
+            if not is_top_momentum(symbol, ranks):
+                continue
+            
+            # Enter position
+            positions[symbol] = {
+                'side': signal,
+                'entry_price': df.iloc[idx]['close'],
+                'entry_idx': idx
+            }
+    
+    # Close any remaining positions
+    for symbol, pos in positions.items():
+        df = data[symbol]
+        current_price = df.iloc[min_len-1]['close']
+        pnl_pct = (current_price - pos['entry_price']) / pos['entry_price']
+        if pos['side'] == 'SHORT':
+            pnl_pct = -pnl_pct
+        
+        equity *= (1 + pnl_pct * 0.01)
+        trades.append({
+            'symbol': symbol,
+            'entry_idx': pos['entry_idx'],
+            'exit_idx': min_len-1,
+            'side': pos['side'],
+            'pnl_pct': pnl_pct,
+            'win': pnl_pct > 0
         })
-        
-        print(f"Period {len(results)}: Train Sharpe={best_train_sharpe:.2f}, "
-              f"Test Sharpe={test_sharpe:.2f}, Lookback={best_lookback}")
-        
-        i += step_bars
     
-    return results
+    return equity, trades
 
 
-def analyze_results(results: List[Dict]) -> Dict:
-    """Analyze walk-forward results."""
-    if not results:
-        return {"error": "No results"}
+def backtest_without_momentum():
+    """Backtest WITHOUT momentum filter (baseline)."""
+    print("Loading data...")
+    data = load_all_data()
     
-    train_sharpes = [r["train_sharpe"] for r in results]
-    test_sharpes = [r["test_sharpe"] for r in results]
+    min_len = min(len(df) for df in data.values())
     
-    avg_train = np.mean(train_sharpes)
-    avg_test = np.mean(test_sharpes)
-    degradation = 1 - avg_test / avg_train if avg_train != 0 else 0
-    pct_profitable = sum(1 for s in test_sharpes if s > 0) / len(test_sharpes)
+    equity = 10000
+    trades = []
+    positions = {}
     
-    summary = {
-        "n_periods": len(results),
-        "avg_train_sharpe": avg_train,
-        "avg_test_sharpe": avg_test,
-        "sharpe_degradation": degradation,
-        "pct_profitable_periods": pct_profitable,
-        "worst_test_sharpe": min(test_sharpes),
-        "best_test_sharpe": max(test_sharpes),
-        "is_viable": avg_test > 0.5 and degradation < 0.5,
+    print(f"Backtesting {min_len} candles WITHOUT momentum filter (baseline)...")
+    
+    for idx in range(50, min_len):
+        for symbol in SYMBOLS:
+            df = data[symbol]
+            
+            if symbol in positions:
+                pos = positions[symbol]
+                current_price = df.iloc[idx]['close']
+                pnl_pct = (current_price - pos['entry_price']) / pos['entry_price']
+                if pos['side'] == 'SHORT':
+                    pnl_pct = -pnl_pct
+                
+                signal = simple_trend_signal(df, idx)
+                if pnl_pct < -0.03 or (signal and signal != pos['side']):
+                    equity *= (1 + pnl_pct * 0.01)
+                    trades.append({
+                        'symbol': symbol,
+                        'entry_idx': pos['entry_idx'],
+                        'exit_idx': idx,
+                        'side': pos['side'],
+                        'pnl_pct': pnl_pct,
+                        'win': pnl_pct > 0
+                    })
+                    del positions[symbol]
+                continue
+            
+            signal = simple_trend_signal(df, idx)
+            if not signal:
+                continue
+            
+            # NO MOMENTUM FILTER - trade all signals
+            positions[symbol] = {
+                'side': signal,
+                'entry_price': df.iloc[idx]['close'],
+                'entry_idx': idx
+            }
+    
+    # Close remaining
+    for symbol, pos in positions.items():
+        df = data[symbol]
+        current_price = df.iloc[min_len-1]['close']
+        pnl_pct = (current_price - pos['entry_price']) / pos['entry_price']
+        if pos['side'] == 'SHORT':
+            pnl_pct = -pnl_pct
+        
+        equity *= (1 + pnl_pct * 0.01)
+        trades.append({
+            'symbol': symbol,
+            'entry_idx': pos['entry_idx'],
+            'exit_idx': min_len-1,
+            'side': pos['side'],
+            'pnl_pct': pnl_pct,
+            'win': pnl_pct > 0
+        })
+    
+    return equity, trades
+
+
+def analyze_results(equity, trades, name):
+    """Analyze backtest results."""
+    df = pd.DataFrame(trades)
+    
+    total_trades = len(trades)
+    winning_trades = df['win'].sum()
+    win_rate = winning_trades / total_trades if total_trades > 0 else 0
+    
+    avg_win = df[df['win']]['pnl_pct'].mean() if winning_trades > 0 else 0
+    avg_loss = df[~df['win']]['pnl_pct'].mean() if (total_trades - winning_trades) > 0 else 0
+    
+    total_return = (equity - 10000) / 10000
+    
+    # Calculate Sharpe (simplified)
+    returns = df['pnl_pct'].values
+    sharpe = (returns.mean() / returns.std() * np.sqrt(252)) if len(returns) > 0 and returns.std() > 0 else 0
+    
+    print(f"\n{'='*70}")
+    print(f"{name}")
+    print(f"{'='*70}")
+    print(f"Total Trades:    {total_trades}")
+    print(f"Winning Trades:  {winning_trades}")
+    print(f"Win Rate:        {win_rate:.1%}")
+    print(f"Avg Win:         {avg_win:.2%}")
+    print(f"Avg Loss:        {avg_loss:.2%}")
+    print(f"Final Equity:    ${equity:,.0f}")
+    print(f"Total Return:    {total_return:.1%}")
+    print(f"Sharpe Ratio:    {sharpe:.2f}")
+    
+    return {
+        'name': name,
+        'trades': total_trades,
+        'win_rate': win_rate,
+        'final_equity': equity,
+        'total_return': total_return,
+        'sharpe': sharpe
     }
-    
-    return summary
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cross-sectional crypto momentum backtest")
-    parser.add_argument("--data-dir", default="data/momentum", help="Directory with CSV files")
-    parser.add_argument("--output", default=None, help="Output CSV for results")
-    args = parser.parse_args()
+    print("="*70)
+    print("BACKTEST: Cross-Sectional Momentum Filter")
+    print("="*70)
+    print()
     
-    if not os.path.exists(args.data_dir):
-        print(f"Error: Data directory '{args.data_dir}' not found.")
-        print("Run scripts/fetch_momentum_data.py first to download data.")
-        return
+    # Baseline (no momentum)
+    equity_baseline, trades_baseline = backtest_without_momentum()
+    results_baseline = analyze_results(equity_baseline, trades_baseline, "BASELINE (No Momentum Filter)")
     
-    print(f"Loading data from {args.data_dir}...")
-    data = load_data(args.data_dir)
+    # With momentum
+    equity_momentum, trades_momentum = backtest_with_momentum()
+    results_momentum = analyze_results(equity_momentum, trades_momentum, "WITH MOMENTUM FILTER")
     
-    if len(data) < 4:
-        print(f"Error: Need at least 4 symbols, found {len(data)}")
-        return
+    # Comparison
+    print(f"\n{'='*70}")
+    print("COMPARISON")
+    print(f"{'='*70}")
+    print(f"{'Metric':<20} {'Baseline':>15} {'Momentum':>15} {'Change':>15}")
+    print(f"{'-'*70}")
+    print(f"{'Trades':<20} {results_baseline['trades']:>15} {results_momentum['trades']:>15} {results_momentum['trades'] - results_baseline['trades']:>15}")
+    print(f"{'Win Rate':<20} {results_baseline['win_rate']:>14.1%} {results_momentum['win_rate']:>14.1%} {(results_momentum['win_rate'] - results_baseline['win_rate']):>14.1%}")
+    print(f"{'Total Return':<20} {results_baseline['total_return']:>14.1%} {results_momentum['total_return']:>14.1%} {(results_momentum['total_return'] - results_baseline['total_return']):>14.1%}")
+    print(f"{'Sharpe Ratio':<20} {results_baseline['sharpe']:>15.2f} {results_momentum['sharpe']:>15.2f} {(results_momentum['sharpe'] - results_baseline['sharpe']):>15.2f}")
     
-    print(f"Loaded {len(data)} symbols")
-    closes = align_data(data)
-    print(f"Aligned data: {len(closes)} bars, {closes.shape[1]} symbols")
+    # Verdict
+    print(f"\n{'='*70}")
+    print("VERDICT")
+    print(f"{'='*70}")
     
-    print("\nRunning walk-forward backtest...")
-    print("=" * 60)
+    if results_momentum['sharpe'] > results_baseline['sharpe']:
+        improvement = (results_momentum['sharpe'] - results_baseline['sharpe']) / results_baseline['sharpe'] * 100
+        print(f"✅ Momentum filter IMPROVES performance")
+        print(f"   Sharpe improvement: +{improvement:.1f}%")
+    else:
+        decline = (results_baseline['sharpe'] - results_momentum['sharpe']) / results_baseline['sharpe'] * 100
+        print(f"❌ Momentum filter DEGRADES performance")
+        print(f"   Sharpe decline: -{decline:.1f}%")
     
-    results = walk_forward_backtest(closes)
-    
-    print("=" * 60)
-    print("\nSummary:")
-    summary = analyze_results(results)
-    
-    for k, v in summary.items():
-        if isinstance(v, float):
-            print(f"  {k}: {v:.3f}")
-        else:
-            print(f"  {k}: {v}")
-    
-    # Validation warnings (per our research references)
-    if summary.get("avg_test_sharpe", 0) < 0.5:
-        print("\n⚠️  WARNING: Avg test Sharpe < 0.5 — strategy may not be viable")
-    if summary.get("sharpe_degradation", 0) > 0.5:
-        print("⚠️  WARNING: Sharpe degradation > 50% — likely overfit")
-    if summary.get("pct_profitable_periods", 0) < 0.6:
-        print("⚠️  WARNING: < 60% profitable periods — inconsistent edge")
-    
-    if args.output:
-        pd.DataFrame(results).to_csv(args.output, index=False)
-        print(f"\nResults saved to {args.output}")
+    print()
 
 
 if __name__ == "__main__":
