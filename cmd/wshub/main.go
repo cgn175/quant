@@ -21,6 +21,8 @@ import (
 const (
 	binanceCombinedURL        = "wss://stream.binance.com:9443/stream?streams="
 	binanceTestnetCombinedURL = "wss://testnet.binance.vision/stream?streams="
+	binanceFuturesURL         = "wss://fstream.binance.com/ws/!forceOrder@arr"
+	binanceFuturesTestnetURL  = "wss://testnet.binancefuture.com/ws/!forceOrder@arr"
 
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 60 * time.Second
@@ -43,11 +45,17 @@ type Hub struct {
 	port    int
 	mu      sync.RWMutex
 
-	// Binance upstream
+	// Binance upstream (spot/futures combined streams)
 	upstreamConn *websocket.Conn
 	upstreamGen  uint64
 	connectMu    sync.Mutex
 	reconnecting bool
+	
+	// Liquidation stream (separate connection)
+	liqConn      *websocket.Conn
+	liqGen       uint64
+	liqMu        sync.Mutex
+	liqActive    bool
 	streams      map[string]bool // union of all client subscriptions
 
 	// Local clients
@@ -287,6 +295,112 @@ func (h *Hub) upstreamPingLoop(conn *websocket.Conn, gen uint64) {
 	}
 }
 
+// ---------- liquidation stream handling ----------
+
+func (h *Hub) startLiquidationStream() {
+	h.liqMu.Lock()
+	defer h.liqMu.Unlock()
+	
+	url := binanceFuturesURL
+	if h.testnet {
+		url = binanceFuturesTestnetURL
+	}
+	
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to connect liquidation stream")
+		return
+	}
+	
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+		return nil
+	})
+	conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+	
+	if h.liqConn != nil {
+		h.liqConn.Close()
+	}
+	h.liqConn = conn
+	h.liqGen++
+	gen := h.liqGen
+	
+	log.Info().Uint64("gen", gen).Msg("connected to liquidation stream")
+	
+	go h.liqReadLoop(conn, gen)
+	go h.liqPingLoop(conn, gen)
+}
+
+func (h *Hub) liqReadLoop(conn *websocket.Conn, gen uint64) {
+	for {
+		select {
+		case <-h.done:
+			return
+		default:
+		}
+		
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			h.liqMu.Lock()
+			current := h.liqConn == conn && h.liqGen == gen
+			h.liqMu.Unlock()
+			if current {
+				log.Error().Err(err).Uint64("gen", gen).Msg("liquidation read error, reconnecting")
+				time.Sleep(5 * time.Second)
+				go h.startLiquidationStream()
+			}
+			return
+		}
+		
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+		
+		// Wrap in combined stream format
+		wrapped := broadcastMessage{
+			Stream: "!forceOrder@arr",
+			Data:   json.RawMessage(msg),
+		}
+		wrappedMsg, _ := json.Marshal(wrapped)
+		
+		// Broadcast to subscribed clients
+		h.mu.RLock()
+		for c := range h.clients {
+			if c.streams["!forceOrder@arr"] {
+				select {
+				case c.send <- wrappedMsg:
+				default:
+					log.Warn().Msg("client send buffer full, dropping liquidation message")
+				}
+			}
+		}
+		h.mu.RUnlock()
+	}
+}
+
+func (h *Hub) liqPingLoop(conn *websocket.Conn, gen uint64) {
+	ticker := time.NewTicker(wsPingInterval)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-h.done:
+			return
+		case <-ticker.C:
+			h.liqMu.Lock()
+			current := h.liqConn == conn && h.liqGen == gen
+			h.liqMu.Unlock()
+			if !current {
+				return
+			}
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsPongTimeout)); err != nil {
+				log.Warn().Err(err).Msg("liquidation ping failed")
+				conn.Close()
+				go h.startLiquidationStream()
+				return
+			}
+		}
+	}
+}
+
 // ---------- local client handling ----------
 
 func (h *Hub) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -380,6 +494,22 @@ func (c *hubClient) subscribe(stream string) {
 		return
 	}
 	h := c.hub
+
+	// Handle liquidation stream separately
+	if stream == "!forceOrder@arr" {
+		h.liqMu.Lock()
+		c.streams[stream] = true
+		needStart := !h.liqActive
+		h.liqActive = true
+		h.liqMu.Unlock()
+		
+		log.Info().Str("stream", stream).Bool("new_connection", needStart).Msg("client subscribed to liquidation")
+		
+		if needStart {
+			go h.startLiquidationStream()
+		}
+		return
+	}
 
 	h.mu.Lock()
 	c.streams[stream] = true
