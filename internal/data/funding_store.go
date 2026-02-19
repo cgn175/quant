@@ -26,6 +26,8 @@ type ArbPosition struct {
 	CloseReason      string
 	ClosePrice       float64
 	CloseTime        time.Time
+	SpotEntryPrice   float64
+	SpotSize         float64
 }
 
 // FundingStore provides SQLite persistence for funding rates and arb positions.
@@ -74,7 +76,9 @@ func NewFundingStore(dbPath string) (*FundingStore, error) {
 			status TEXT NOT NULL DEFAULT 'OPEN',
 			close_reason TEXT NOT NULL DEFAULT '',
 			close_price REAL NOT NULL DEFAULT 0,
-			close_time INTEGER NOT NULL DEFAULT 0
+			close_time INTEGER NOT NULL DEFAULT 0,
+			spot_entry_price REAL NOT NULL DEFAULT 0,
+			spot_size REAL NOT NULL DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS idx_arb_status ON arb_positions(status);
 	`
@@ -156,11 +160,12 @@ func (s *FundingStore) SavePosition(pos *ArbPosition) (int64, error) {
 
 	res, err := s.db.Exec(`
 		INSERT INTO arb_positions
-		(symbol, side, entry_price, size, entry_time, entry_funding, funding_collected, funding_payments, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')`,
+		(symbol, side, entry_price, size, entry_time, entry_funding, funding_collected, funding_payments, status, spot_entry_price, spot_size)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)`,
 		pos.Symbol, pos.Side, pos.EntryPrice, pos.Size,
 		pos.EntryTime.UnixMilli(), pos.EntryFunding,
 		pos.FundingCollected, pos.FundingPayments,
+		pos.SpotEntryPrice, pos.SpotSize,
 	)
 	if err != nil {
 		return 0, err
@@ -196,7 +201,7 @@ func (s *FundingStore) ClosePosition(id int64, reason string, closePrice float64
 func (s *FundingStore) LoadOpenPositions() ([]ArbPosition, error) {
 	rows, err := s.db.Query(`
 		SELECT id, symbol, side, entry_price, size, entry_time, entry_funding,
-		       funding_collected, funding_payments, status
+		       funding_collected, funding_payments, status, spot_entry_price, spot_size
 		FROM arb_positions WHERE status = 'OPEN'`)
 	if err != nil {
 		return nil, err
@@ -211,6 +216,7 @@ func (s *FundingStore) LoadOpenPositions() ([]ArbPosition, error) {
 			&p.ID, &p.Symbol, &p.Side, &p.EntryPrice, &p.Size,
 			&entryTime, &p.EntryFunding,
 			&p.FundingCollected, &p.FundingPayments, &p.Status,
+			&p.SpotEntryPrice, &p.SpotSize,
 		); err != nil {
 			return nil, err
 		}

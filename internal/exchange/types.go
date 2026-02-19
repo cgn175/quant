@@ -37,6 +37,8 @@ type Client interface {
 	FetchFundingRate(symbol string) (*FundingRateInfo, error)
 	FetchFundingRates(symbols []string) (map[string]*FundingRateInfo, error)
 	FetchAllFundingRates() (map[string]*FundingRateInfo, error)
+	FetchSpotPrice(symbol string) (float64, error)
+	FetchOpenInterest(symbol string) (float64, error)
 	Close() error
 }
 

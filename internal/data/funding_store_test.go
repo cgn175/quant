@@ -172,6 +172,47 @@ func TestUpdateAndClosePosition(t *testing.T) {
 	}
 }
 
+func TestSavePositionWithSpotHedge(t *testing.T) {
+	store := tempStore(t)
+
+	now := time.Now().Truncate(time.Millisecond)
+
+	pos := &ArbPosition{
+		Symbol:         "BTCUSDT",
+		Side:           "SHORT",
+		EntryPrice:     60000,
+		Size:           0.016,
+		EntryTime:      now,
+		EntryFunding:   0.0005,
+		SpotEntryPrice: 59950,
+		SpotSize:       0.016,
+	}
+
+	id, err := store.SavePosition(pos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id <= 0 {
+		t.Fatal("expected positive ID")
+	}
+
+	positions, err := store.LoadOpenPositions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 1 {
+		t.Fatalf("expected 1 open position, got %d", len(positions))
+	}
+
+	p := positions[0]
+	if p.SpotEntryPrice != 59950 {
+		t.Errorf("expected spot_entry_price=59950, got %f", p.SpotEntryPrice)
+	}
+	if p.SpotSize != 0.016 {
+		t.Errorf("expected spot_size=0.016, got %f", p.SpotSize)
+	}
+}
+
 func TestPruneFundingRates(t *testing.T) {
 	store := tempStore(t)
 

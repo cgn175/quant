@@ -655,6 +655,90 @@ func (c *BinanceClient) FetchAllFundingRates() (map[string]*FundingRateInfo, err
 	return results, nil
 }
 
+// FetchSpotPrice fetches the current spot price for a symbol via Binance REST API.
+func (c *BinanceClient) FetchSpotPrice(symbol string) (float64, error) {
+	baseURL := "https://api.binance.com"
+	if c.testnet {
+		baseURL = "https://testnet.binance.vision"
+	}
+	url := fmt.Sprintf("%s/api/v3/ticker/price?symbol=%s", baseURL, symbol)
+
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("spot price HTTP request failed for %s: %w", symbol, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("spot price read body failed for %s: %w", symbol, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("spot price API error for %s: status=%d body=%s", symbol, resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Symbol string `json:"symbol"`
+		Price  string `json:"price"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, fmt.Errorf("spot price JSON parse failed for %s: %w", symbol, err)
+	}
+
+	price, err := strconv.ParseFloat(result.Price, 64)
+	if err != nil {
+		return 0, fmt.Errorf("spot price parse float failed for %s: %w", symbol, err)
+	}
+
+	return price, nil
+}
+
+// binanceOpenInterest is the JSON response from GET /fapi/v1/openInterest.
+type binanceOpenInterest struct {
+	Symbol       string `json:"symbol"`
+	OpenInterest string `json:"openInterest"`
+	Time         int64  `json:"time"`
+}
+
+// FetchOpenInterest fetches the current open interest for a symbol from the
+// Binance Futures REST endpoint.
+func (c *BinanceClient) FetchOpenInterest(symbol string) (float64, error) {
+	url := fmt.Sprintf("%s/fapi/v1/openInterest?symbol=%s", c.futuresBaseURL(), symbol)
+
+	resp, err := c.httpClient.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("open interest HTTP request failed for %s: %w", symbol, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("open interest read body failed for %s: %w", symbol, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("open interest API error for %s: status=%d body=%s", symbol, resp.StatusCode, string(body))
+	}
+
+	var oi binanceOpenInterest
+	if err := json.Unmarshal(body, &oi); err != nil {
+		return 0, fmt.Errorf("open interest JSON parse failed for %s: %w", symbol, err)
+	}
+
+	value, err := strconv.ParseFloat(oi.OpenInterest, 64)
+	if err != nil {
+		return 0, fmt.Errorf("open interest parse float failed for %s: %w", symbol, err)
+	}
+
+	log.Debug().
+		Str("symbol", symbol).
+		Float64("open_interest", value).
+		Msg("fetched open interest")
+
+	return value, nil
+}
+
 // ---------------------------------------------------------------------------
 // REST Polling for Market Data (Alternative to WebSocket)
 // Use this when running multiple bots to avoid WebSocket connection limits

@@ -46,6 +46,8 @@ type arbPosition struct {
 	EntryFunding     float64 // funding rate at entry
 	FundingCollected float64 // estimated total funding collected
 	FundingPayments  int     // number of funding payments received
+	SpotEntryPrice   float64 // spot hedge entry price (0 if no hedge)
+	SpotSize         float64 // spot hedge size (0 if no hedge)
 }
 
 func NewStrategy(cfg config.FundingArbConfig, client exchange.Client, executor execution.Executor, execEngine *execution.Engine, symbols []string, store *data.FundingStore) *Strategy {
@@ -101,6 +103,8 @@ func (s *Strategy) restorePositions() error {
 			EntryFunding:     p.EntryFunding,
 			FundingCollected: p.FundingCollected,
 			FundingPayments:  p.FundingPayments,
+			SpotEntryPrice:   p.SpotEntryPrice,
+			SpotSize:         p.SpotSize,
 		}
 		log.Info().
 			Str("symbol", p.Symbol).
@@ -209,10 +213,10 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 		return
 	}
 
-	// Execute entry
+	// Execute perp entry
 	order, err := s.executor.ExecuteMarketOrder(sym, orderSide, size)
 	if err != nil {
-		log.Error().Err(err).Str("symbol", sym).Str("side", side).Msg("funding arb: entry failed")
+		log.Error().Err(err).Str("symbol", sym).Str("side", side).Msg("funding arb: perp entry failed")
 		return
 	}
 
@@ -225,15 +229,42 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 		EntryFunding: fundingRate,
 	}
 
+	// Delta-neutral: place spot hedge (opposite direction)
+	if s.cfg.DeltaNeutral {
+		var spotSide execution.OrderSide
+		if side == "SHORT" {
+			spotSide = execution.OrderSideBuy // short perp → buy spot
+		} else {
+			spotSide = execution.OrderSideSell // long perp → sell spot
+		}
+		spotOrder, err := s.executor.ExecuteMarketOrder(sym, spotSide, order.FilledSize)
+		if err != nil {
+			log.Error().Err(err).Str("symbol", sym).Msg("funding arb: spot hedge failed, closing perp")
+			// Rollback: close the perp leg
+			var rollbackSide execution.OrderSide
+			if side == "SHORT" {
+				rollbackSide = execution.OrderSideBuy
+			} else {
+				rollbackSide = execution.OrderSideSell
+			}
+			s.executor.ExecuteMarketOrder(sym, rollbackSide, order.FilledSize)
+			return
+		}
+		pos.SpotEntryPrice = spotOrder.FilledPrice
+		pos.SpotSize = spotOrder.FilledSize
+	}
+
 	// Persist to DB
 	if s.store != nil {
 		dbPos := &data.ArbPosition{
-			Symbol:       pos.Symbol,
-			Side:         pos.Side,
-			EntryPrice:   pos.EntryPrice,
-			Size:         pos.Size,
-			EntryTime:    pos.EntryTime,
-			EntryFunding: pos.EntryFunding,
+			Symbol:         pos.Symbol,
+			Side:           pos.Side,
+			EntryPrice:     pos.EntryPrice,
+			Size:           pos.Size,
+			EntryTime:      pos.EntryTime,
+			EntryFunding:   pos.EntryFunding,
+			SpotEntryPrice: pos.SpotEntryPrice,
+			SpotSize:       pos.SpotSize,
 		}
 		id, err := s.store.SavePosition(dbPos)
 		if err != nil {
@@ -255,6 +286,8 @@ func (s *Strategy) checkEntry(sym string, fundingRate, markPrice float64) {
 		Float64("size", order.FilledSize).
 		Float64("funding_rate", fundingRate).
 		Float64("annualized_yield_pct", annualizedYield).
+		Bool("delta_neutral", s.cfg.DeltaNeutral).
+		Float64("spot_price", pos.SpotEntryPrice).
 		Msg("funding arb: opened position")
 }
 
@@ -289,7 +322,8 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 	reason := ""
 
 	// Check max loss per position (directional risk protection)
-	if s.cfg.MaxLossPct > 0 {
+	// Skip when delta-neutral — position is hedged, no directional exposure
+	if s.cfg.MaxLossPct > 0 && pos.SpotSize == 0 {
 		var pricePnLPct float64
 		if pos.Side == "SHORT" {
 			pricePnLPct = (pos.EntryPrice - markPrice) / pos.EntryPrice
@@ -327,7 +361,7 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 		return
 	}
 
-	// Close position
+	// Close perp position
 	_, err := s.execEngine.ClosePosition(
 		sym,
 		pos.Side,
@@ -341,8 +375,22 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 	)
 
 	if err != nil {
-		log.Error().Err(err).Str("symbol", sym).Msg("funding arb: close failed")
+		log.Error().Err(err).Str("symbol", sym).Msg("funding arb: perp close failed")
 		return
+	}
+
+	// Close spot hedge if delta-neutral
+	if pos.SpotSize > 0 {
+		var spotCloseSide execution.OrderSide
+		if pos.Side == "SHORT" {
+			spotCloseSide = execution.OrderSideSell // had bought spot → sell
+		} else {
+			spotCloseSide = execution.OrderSideBuy // had sold spot → buy back
+		}
+		_, err := s.executor.ExecuteMarketOrder(sym, spotCloseSide, pos.SpotSize)
+		if err != nil {
+			log.Error().Err(err).Str("symbol", sym).Msg("funding arb: spot hedge close failed")
+		}
 	}
 
 	// Persist close to DB
@@ -352,15 +400,24 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 		}
 	}
 
-	// Calculate price PnL
-	var pricePnL float64
+	// Calculate PnL
+	var perpPnL float64
 	if pos.Side == "SHORT" {
-		pricePnL = (pos.EntryPrice - markPrice) * pos.Size
+		perpPnL = (pos.EntryPrice - markPrice) * pos.Size
 	} else {
-		pricePnL = (markPrice - pos.EntryPrice) * pos.Size
+		perpPnL = (markPrice - pos.EntryPrice) * pos.Size
 	}
 
-	totalPnL := pricePnL + pos.FundingCollected
+	var spotPnL float64
+	if pos.SpotSize > 0 {
+		if pos.Side == "SHORT" {
+			spotPnL = (markPrice - pos.SpotEntryPrice) * pos.SpotSize // bought spot, now selling
+		} else {
+			spotPnL = (pos.SpotEntryPrice - markPrice) * pos.SpotSize // sold spot, now buying back
+		}
+	}
+
+	totalPnL := perpPnL + spotPnL + pos.FundingCollected
 
 	log.Info().
 		Str("symbol", sym).
@@ -368,10 +425,12 @@ func (s *Strategy) managePosition(sym string, pos *arbPosition, currentFunding, 
 		Str("reason", reason).
 		Float64("entry_price", pos.EntryPrice).
 		Float64("exit_price", markPrice).
-		Float64("price_pnl", pricePnL).
+		Float64("perp_pnl", perpPnL).
+		Float64("spot_pnl", spotPnL).
 		Float64("funding_collected", pos.FundingCollected).
 		Float64("total_pnl", totalPnL).
 		Int("funding_payments", pos.FundingPayments).
+		Bool("delta_neutral", pos.SpotSize > 0).
 		Msg("funding arb: closed position")
 
 	delete(s.positions, sym)
@@ -382,21 +441,36 @@ func (s *Strategy) closeAllPositions() {
 	defer s.mu.Unlock()
 
 	for sym, pos := range s.positions {
+		// Close perp leg
 		var orderSide execution.OrderSide
 		if pos.Side == "SHORT" {
-			orderSide = execution.OrderSideBuy // close short by buying
+			orderSide = execution.OrderSideBuy
 		} else {
-			orderSide = execution.OrderSideSell // close long by selling
+			orderSide = execution.OrderSideSell
 		}
 
 		_, err := s.executor.ExecuteMarketOrder(sym, orderSide, pos.Size)
 		if err != nil {
-			log.Error().Err(err).Str("symbol", sym).Msg("funding arb: shutdown close failed")
-		} else {
-			log.Info().Str("symbol", sym).Msg("funding arb: closed position on shutdown")
+			log.Error().Err(err).Str("symbol", sym).Msg("funding arb: shutdown perp close failed")
 		}
 
-		// Mark closed in DB (graceful shutdown, not a loss)
+		// Close spot hedge
+		if pos.SpotSize > 0 {
+			var spotSide execution.OrderSide
+			if pos.Side == "SHORT" {
+				spotSide = execution.OrderSideSell
+			} else {
+				spotSide = execution.OrderSideBuy
+			}
+			_, err := s.executor.ExecuteMarketOrder(sym, spotSide, pos.SpotSize)
+			if err != nil {
+				log.Error().Err(err).Str("symbol", sym).Msg("funding arb: shutdown spot close failed")
+			}
+		}
+
+		log.Info().Str("symbol", sym).Bool("had_spot_hedge", pos.SpotSize > 0).Msg("funding arb: closed position on shutdown")
+
+		// Mark closed in DB
 		if s.store != nil && pos.dbID > 0 {
 			if err := s.store.ClosePosition(pos.dbID, "shutdown", 0, time.Now()); err != nil {
 				log.Error().Err(err).Str("symbol", sym).Msg("failed to close arb position in DB on shutdown")

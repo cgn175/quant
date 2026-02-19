@@ -311,6 +311,11 @@ func (c *HubClient) Close() error {
 	return nil
 }
 
+// FetchSpotPrice is not supported via the hub; returns an error.
+func (c *HubClient) FetchSpotPrice(symbol string) (float64, error) {
+	return 0, fmt.Errorf("not implemented via hub")
+}
+
 // ---------------------------------------------------------------------------
 // Funding Rate REST calls — direct to Binance (not via hub)
 // ---------------------------------------------------------------------------
@@ -381,6 +386,10 @@ func (c *HubClient) FetchFundingRates(symbols []string) (map[string]*FundingRate
 	}
 
 	return results, nil
+}
+
+func (c *HubClient) FetchOpenInterest(symbol string) (float64, error) {
+	return 0, fmt.Errorf("open interest not implemented via hub")
 }
 
 func (c *HubClient) FetchAllFundingRates() (map[string]*FundingRateInfo, error) {

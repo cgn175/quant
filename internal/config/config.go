@@ -120,6 +120,7 @@ type StrategyConfig struct {
 	DynamicStop           DynamicStopConfig   `mapstructure:"dynamic_stop"`
 	MarketMaking          MarketMakingConfig  `mapstructure:"market_making"`
 	FundingArb            FundingArbConfig    `mapstructure:"funding_arb"`
+	BasisTrade            BasisTradeConfig    `mapstructure:"basis_trade"`
 	Variant               string              `mapstructure:"variant"`
 
 	// Time-based exit parameters
@@ -211,6 +212,17 @@ type FundingArbConfig struct {
 	ScanIntervalMs  int     `mapstructure:"scan_interval_ms"`  // How often to check funding rates
 	MaxLossPct      float64 `mapstructure:"max_loss_pct"`      // Max loss per position before forced close (e.g., 0.03 = 3%)
 	DBPath          string  `mapstructure:"db_path"`           // Path to SQLite database for position/rate persistence
+	DeltaNeutral    bool    `mapstructure:"delta_neutral"`     // Enable delta-neutral spot hedge
+}
+
+// BasisTradeConfig holds parameters for the basis trade (spot-futures arbitrage) strategy.
+type BasisTradeConfig struct {
+	MinBasisAnnualized float64 `mapstructure:"min_basis_annualized"` // Min annualized basis to enter (e.g., 0.15 = 15%)
+	ExitBasis          float64 `mapstructure:"exit_basis"`           // Exit when annualized basis drops below this
+	MaxPositions       int     `mapstructure:"max_positions"`
+	PositionSizeUSD    float64 `mapstructure:"position_size_usd"`
+	ScanIntervalMs     int     `mapstructure:"scan_interval_ms"`
+	DBPath             string  `mapstructure:"db_path"`
 }
 
 // StorageConfig holds data persistence configuration.
@@ -424,6 +436,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("strategy.funding_arb.scan_interval_ms", 300000)  // 5 minutes
 	v.SetDefault("strategy.funding_arb.max_loss_pct", 0.03)        // 3% max loss per position
 	v.SetDefault("strategy.funding_arb.db_path", "funding.db")    // SQLite DB for positions/rates
+	v.SetDefault("strategy.funding_arb.delta_neutral", true)
+
+	// Basis trade defaults
+	v.SetDefault("strategy.basis_trade.min_basis_annualized", 0.15)
+	v.SetDefault("strategy.basis_trade.exit_basis", 0.05)
+	v.SetDefault("strategy.basis_trade.max_positions", 3)
+	v.SetDefault("strategy.basis_trade.position_size_usd", 1000.0)
+	v.SetDefault("strategy.basis_trade.scan_interval_ms", 300000)
+	v.SetDefault("strategy.basis_trade.db_path", "basis.db")
 
 	// Storage defaults
 	v.SetDefault("storage.candle_db_path", "candles.db")
