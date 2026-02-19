@@ -15,8 +15,9 @@ import (
 
 func main() {
 	var (
-		dbPath = flag.String("db", "liquidations.db", "SQLite database path")
-		debug  = flag.Bool("debug", false, "Enable debug logging")
+		dbPath  = flag.String("db", "data/liquidations.db", "SQLite database path")
+		hubURL  = flag.String("hub", "localhost:9089/ws", "WebSocket hub URL (empty for direct Binance connection)")
+		debug   = flag.Bool("debug", false, "Enable debug logging")
 	)
 	flag.Parse()
 
@@ -29,7 +30,7 @@ func main() {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
 
-	log.Info().Msg("Starting liquidation data collector")
+	log.Info().Str("hub_url", *hubURL).Msg("Starting liquidation data collector")
 
 	// Target symbols for liquidation cascade analysis
 	symbols := []string{
@@ -40,7 +41,7 @@ func main() {
 	}
 
 	// Create collector
-	collector, err := data.NewLiquidationCollector(*dbPath, symbols)
+	collector, err := data.NewLiquidationCollector(*dbPath, *hubURL, symbols)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create liquidation collector")
 	}

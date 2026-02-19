@@ -40,6 +40,7 @@ type OpenInterestData struct {
 // LiquidationCollector collects liquidation and open interest data
 type LiquidationCollector struct {
 	db       *sql.DB
+	hubURL   string
 	symbols  []string
 	wsConn   *websocket.Conn
 	mu       sync.Mutex
@@ -48,7 +49,7 @@ type LiquidationCollector struct {
 }
 
 // NewLiquidationCollector creates a new liquidation data collector
-func NewLiquidationCollector(dbPath string, symbols []string) (*LiquidationCollector, error) {
+func NewLiquidationCollector(dbPath string, hubURL string, symbols []string) (*LiquidationCollector, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -62,6 +63,7 @@ func NewLiquidationCollector(dbPath string, symbols []string) (*LiquidationColle
 	
 	return &LiquidationCollector{
 		db:      db,
+		hubURL:  hubURL,
 		symbols: symbols,
 		ctx:     ctx,
 		cancel:  cancel,
@@ -115,8 +117,17 @@ func (lc *LiquidationCollector) startLiquidationStream() {
 }
 
 func (lc *LiquidationCollector) connectLiquidationWS() error {
-	// Connect to all liquidation streams
-	url := "wss://fstream.binance.com/ws/!forceOrder@arr"
+	// Use local hub if configured, otherwise connect directly to Binance
+	var url string
+	if lc.hubURL != "" {
+		// Subscribe to liquidation stream via local hub
+		url = fmt.Sprintf("ws://%s", lc.hubURL)
+		log.Info().Str("hub_url", lc.hubURL).Msg("Connecting to liquidation stream via local hub")
+	} else {
+		// Connect directly to Binance
+		url = "wss://fstream.binance.com/ws/!forceOrder@arr"
+		log.Info().Msg("Connecting directly to Binance liquidation stream")
+	}
 	
 	dialer := websocket.DefaultDialer
 	conn, _, err := dialer.Dial(url, nil)
@@ -129,6 +140,19 @@ func (lc *LiquidationCollector) connectLiquidationWS() error {
 	lc.mu.Unlock()
 
 	log.Info().Str("url", url).Msg("Connected to liquidation stream")
+	
+	// If using hub, subscribe to liquidation stream
+	if lc.hubURL != "" {
+		subscribeMsg := map[string]interface{}{
+			"method": "SUBSCRIBE",
+			"params": []string{"!forceOrder@arr"},
+			"id":     1,
+		}
+		if err := conn.WriteJSON(subscribeMsg); err != nil {
+			return fmt.Errorf("subscribe to liquidation stream: %w", err)
+		}
+		log.Info().Msg("Subscribed to !forceOrder@arr via hub")
+	}
 
 	// Read messages
 	for {
