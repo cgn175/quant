@@ -73,6 +73,7 @@ MODEL_VARIANTS = {
     "regime_v1": ROOT / "ml" / "regime" / "train_regime.py",
     "regime_v2": ROOT / "ml" / "regime" / "train_regime_v2.py",
     "regime_v1_long": ROOT / "ml" / "regime" / "train_regime_directional_save.py",
+    "regime_hmm_v1": ROOT / "ml" / "regime" / "train_regime_hmm.py",
     "vol_v1": ROOT / "ml" / "volatility" / "train_volatility.py",
 }
 

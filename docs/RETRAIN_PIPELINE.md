@@ -14,7 +14,7 @@ The automated ML model retraining pipeline (`scripts/retrain_pipeline.py`) handl
 
 ### Model Variants
 
-The pipeline trains 4 model variants:
+The pipeline trains 5 model variants:
 
 1. **Regime v1** (all 4 symbols) — 6-feature regime classifier
    - Script: `ml/regime/train_regime.py`
@@ -28,7 +28,12 @@ The pipeline trains 4 model variants:
    - Script: `ml/regime/train_regime_directional_save.py`
    - Output: `ml/models/regime_v1_long/`
 
-4. **Volatility v1** (all 4 symbols) — Volatility predictor for dynamic stop-loss
+4. **Regime HMM v1** (all 4 symbols) — HMM-based regime detection (Phase 1)
+   - Script: `ml/regime/train_regime_hmm.py`
+   - Output: `ml/models/regime_hmm_v1/`
+   - Models: 4 files per symbol (model, scaler, mapping, stats)
+
+5. **Volatility v1** (all 4 symbols) — Volatility predictor for dynamic stop-loss
    - Script: `ml/volatility/train_volatility.py`
    - Output: `ml/models/vol_v1/`
 
@@ -127,6 +132,16 @@ Models are **approved** if ALL conditions pass:
 - Regime v2 ETH: Only ETH evaluation matters for deployment gate (per ML_V2 report)
 - Regime v1: All 4 symbols must pass
 - Regime v1 LONG: Only SOL must pass
+
+### HMM Regime Models
+
+HMM models are **approved** if:
+
+1. **State Distribution**: All 3 states have >5% representation
+2. **Forward Return Validation**: Trending state has highest |forward_return|
+3. **Test Set Validation**: All states present in test set
+
+HMM models don't use AUC (unsupervised), so evaluation is based on state characteristics.
 
 ### Volatility Models (Regressors)
 
