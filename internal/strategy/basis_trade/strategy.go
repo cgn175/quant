@@ -2,6 +2,7 @@ package basistrade
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -197,9 +198,10 @@ func (s *Strategy) scanAndManage() {
 		}
 		basis := (markPrice - spotPrice) / spotPrice
 
-		// Annualize: perpetuals have funding every 8h, basis compounds
-		// Simplified: annualized = basis * (365 * 3) for 8h periods per year
-		annualizedBasis := basis * 365 * 3
+		// Annualize with proper compounding: (1 + basis)^(365*3) - 1
+		// There are 3 funding periods per day (every 8h), so 1095 periods per year.
+		// Linear approximation (basis * 1095) massively overstates for large basis values.
+		annualizedBasis := math.Pow(1+basis, 365*3) - 1
 
 		pos, hasPos := s.positions[sym]
 
@@ -306,9 +308,20 @@ func (s *Strategy) checkEntry(sym string, annualizedBasis, spotPrice, markPrice 
 }
 
 func (s *Strategy) managePosition(sym string, pos *basisPosition, annualizedBasis, spotPrice, markPrice float64) {
-	// Exit when basis has converged below threshold
-	if annualizedBasis >= s.cfg.ExitBasis {
+	var reason string
+
+	// Check adverse basis: force close if basis goes deeply into backwardation
+	if s.cfg.MaxAdverseBasis < 0 && annualizedBasis < s.cfg.MaxAdverseBasis {
+		reason = "adverse_basis"
+		log.Warn().
+			Str("symbol", sym).
+			Float64("annualized_basis_pct", annualizedBasis*100).
+			Float64("max_adverse_basis_pct", s.cfg.MaxAdverseBasis*100).
+			Msg("basis trade: force closing — basis moved into deep backwardation")
+	} else if annualizedBasis >= s.cfg.ExitBasis {
 		return // basis still attractive, hold
+	} else {
+		reason = "basis_converged"
 	}
 
 	// Close both legs
@@ -324,7 +337,7 @@ func (s *Strategy) managePosition(sym string, pos *basisPosition, annualizedBasi
 		"SHORT",
 		markPrice,
 		pos.PerpSize,
-		"basis_converged",
+		reason,
 		strategy.SignalNone,
 		"basis_trade",
 		pos.PerpEntryPrice,
@@ -336,7 +349,7 @@ func (s *Strategy) managePosition(sym string, pos *basisPosition, annualizedBasi
 
 	// Persist close to DB
 	if s.store != nil && pos.dbID > 0 {
-		if err := s.store.ClosePosition(pos.dbID, "basis_converged", markPrice, time.Now()); err != nil {
+		if err := s.store.ClosePosition(pos.dbID, reason, markPrice, time.Now()); err != nil {
 			log.Error().Err(err).Str("symbol", sym).Msg("failed to close basis position in DB")
 		}
 	}

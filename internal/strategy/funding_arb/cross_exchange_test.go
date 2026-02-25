@@ -96,6 +96,7 @@ func TestCrossExchangeManager_ScanOpportunities(t *testing.T) {
 	assert.Equal(t, 0.001, opp.HighFundingRate)
 	assert.Equal(t, 0.0005, opp.LowFundingRate)
 	assert.Equal(t, 5.0, opp.SpreadBps) // 0.0005 * 10000 = 5 bps
+	assert.Equal(t, 50000.0, opp.MarkPrice) // Average mark price from both exchanges
 	assert.Greater(t, opp.AnnualizedReturn, 0.0)
 
 	binanceClient.AssertExpectations(t)

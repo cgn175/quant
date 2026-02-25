@@ -66,6 +66,7 @@ type CrossExchangeOpportunity struct {
 	LowExchange         string
 	HighFundingRate     float64
 	LowFundingRate      float64
+	MarkPrice           float64 // Average mark price across exchanges
 	SpreadBps           float64 // Spread in basis points
 	AnnualizedReturn    float64 // Expected annualized return %
 	EstTransferCostBps  float64 // Estimated round-trip transfer cost in bps

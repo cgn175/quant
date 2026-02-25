@@ -586,8 +586,11 @@ func (s *Strategy) checkCrossExchangeEntry(opp *exchange.CrossExchangeOpportunit
 		return
 	}
 
-	// Position sizing based on lower funding rate exchange (more conservative)
-	markPrice := (opp.HighFundingRate + opp.LowFundingRate) / 2 // Use average as proxy
+	// Position sizing based on mark price
+	markPrice := opp.MarkPrice
+	if markPrice <= 0 {
+		return // no valid mark price
+	}
 	size := s.cfg.PositionSizeUSD / markPrice
 	if size <= 0 {
 		return
@@ -612,6 +615,7 @@ func (s *Strategy) checkCrossExchangeEntry(opp *exchange.CrossExchangeOpportunit
 	pos := &arbPosition{
 		Symbol:          opp.Symbol,
 		Side:            "CROSS_EXCHANGE",
+		EntryPrice:      markPrice,
 		Size:            size,
 		EntryTime:       time.Now(),
 		IsCrossExchange: true,
@@ -657,8 +661,14 @@ func (s *Strategy) manageCrossExchangePosition(symbol string, pos *arbPosition, 
 	}
 
 	// Update funding collection estimate
-	spreadDiff := opp.SpreadBps / 10000 // Convert bps to decimal
-	estimatedPayment := spreadDiff * pos.Size * (opp.HighFundingRate + opp.LowFundingRate) / 2
+	// Payment = size * markPrice * (highFundingRate - lowFundingRate)
+	// We are short the high-funding exchange and long the low-funding exchange,
+	// so we collect the differential between the two rates.
+	markPrice := opp.MarkPrice
+	if markPrice <= 0 {
+		return
+	}
+	estimatedPayment := pos.Size * markPrice * (opp.HighFundingRate - opp.LowFundingRate)
 	pos.FundingCollected += estimatedPayment
 	pos.FundingPayments++
 
@@ -684,7 +694,10 @@ func (s *Strategy) closeCrossExchangePosition(symbol string, pos *arbPosition, r
 
 	// Register exit with portfolio monitor
 	if s.portfolioMonitor != nil {
-		notional := pos.Size * (pos.HighFundingRate + pos.LowFundingRate) / 2 // Estimate
+		notional := pos.Size * pos.EntryPrice
+		if pos.EntryPrice <= 0 {
+			notional = pos.Size // fallback
+		}
 		s.portfolioMonitor.RegisterExit(symbol, notional, "funding_arb")
 	}
 

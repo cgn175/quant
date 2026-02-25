@@ -289,6 +289,7 @@ type FundingArbConfig struct {
 type BasisTradeConfig struct {
 	MinBasisAnnualized float64  `mapstructure:"min_basis_annualized"` // Min annualized basis to enter (e.g., 0.15 = 15%)
 	ExitBasis          float64  `mapstructure:"exit_basis"`           // Exit when annualized basis drops below this
+	MaxAdverseBasis    float64  `mapstructure:"max_adverse_basis"`    // Force close if basis goes negative beyond this (e.g., -0.10 = -10% annualized)
 	MaxPositions       int      `mapstructure:"max_positions"`
 	PositionSizeUSD    float64  `mapstructure:"position_size_usd"`
 	ScanIntervalMs     int      `mapstructure:"scan_interval_ms"`
@@ -607,6 +608,7 @@ func setDefaults(v *viper.Viper) {
 	// Basis trade defaults
 	v.SetDefault("strategy.basis_trade.min_basis_annualized", 0.15)
 	v.SetDefault("strategy.basis_trade.exit_basis", 0.05)
+	v.SetDefault("strategy.basis_trade.max_adverse_basis", -0.10) // Force close at -10% annualized (backwardation)
 	v.SetDefault("strategy.basis_trade.max_positions", 3)
 	v.SetDefault("strategy.basis_trade.position_size_usd", 1000.0)
 	v.SetDefault("strategy.basis_trade.scan_interval_ms", 300000)

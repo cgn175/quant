@@ -74,17 +74,19 @@ func (m *CrossExchangeManager) ScanCrossExchangeOpportunities(symbols []string, 
 	
 	for _, symbol := range symbols {
 		var exchangeRates []struct {
-			name string
-			rate float64
+			name      string
+			rate      float64
+			markPrice float64
 		}
 		
 		// Collect rates for this symbol from all exchanges
 		for exchangeName, symbolRates := range rates {
 			if rate, exists := symbolRates[symbol]; exists {
 				exchangeRates = append(exchangeRates, struct {
-					name string
-					rate float64
-				}{exchangeName, rate.FundingRate})
+					name      string
+					rate      float64
+					markPrice float64
+				}{exchangeName, rate.FundingRate, rate.MarkPrice})
 			}
 		}
 		
@@ -92,11 +94,17 @@ func (m *CrossExchangeManager) ScanCrossExchangeOpportunities(symbols []string, 
 			continue // Need at least 2 exchanges
 		}
 		
-		// Find highest and lowest funding rates
+		// Find highest and lowest funding rates, and compute average mark price
 		var highExchange, lowExchange string
 		var highRate, lowRate float64
+		var totalMarkPrice float64
+		var markPriceCount int
 		
 		for i, er := range exchangeRates {
+			if er.markPrice > 0 {
+				totalMarkPrice += er.markPrice
+				markPriceCount++
+			}
 			if i == 0 {
 				highExchange = er.name
 				lowExchange = er.name
@@ -112,6 +120,11 @@ func (m *CrossExchangeManager) ScanCrossExchangeOpportunities(symbols []string, 
 					lowRate = er.rate
 				}
 			}
+		}
+		
+		var avgMarkPrice float64
+		if markPriceCount > 0 {
+			avgMarkPrice = totalMarkPrice / float64(markPriceCount)
 		}
 		
 		// Calculate spread in basis points
@@ -132,6 +145,7 @@ func (m *CrossExchangeManager) ScanCrossExchangeOpportunities(symbols []string, 
 				LowExchange:         lowExchange,
 				HighFundingRate:     highRate,
 				LowFundingRate:      lowRate,
+				MarkPrice:           avgMarkPrice,
 				SpreadBps:           spreadBps,
 				AnnualizedReturn:    annualizedReturn,
 				EstTransferCostBps:  estTransferCostBps,
