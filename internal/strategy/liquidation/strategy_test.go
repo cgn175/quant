@@ -267,7 +267,11 @@ func TestDetectCrowdedPositioning_Confidence(t *testing.T) {
 			if tt.fundingRate < 0 {
 				longShortRatio = 0.7 // Short-heavy for short squeeze
 			}
-			signal := strategy.detectCrowdedPositioning("BTCUSDT", tt.fundingRate, tt.oiChange, longShortRatio)
+			fundingPercentile := 0.8 // Simulate high percentile for long squeeze
+			if tt.fundingRate < 0 {
+				fundingPercentile = 0.2 // Low percentile for short squeeze
+			}
+			signal := strategy.detectCrowdedPositioning("BTCUSDT", tt.fundingRate, fundingPercentile, tt.oiChange, longShortRatio)
 			if !tt.wantSignal {
 				assert.Nil(t, signal)
 				return

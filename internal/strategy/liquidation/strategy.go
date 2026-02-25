@@ -12,13 +12,14 @@ import (
 
 // LiquidationSignal represents a liquidation cascade opportunity
 type LiquidationSignal struct {
-	Symbol          string
-	Direction       string  // "long_squeeze" or "short_squeeze"
-	FundingRate     float64
-	OIChange        float64 // % change in last 24h
-	LiqCluster      float64 // Price level with high liquidation risk
-	Confidence      float64 // 0-1
-	Timestamp       time.Time
+	Symbol           string
+	Direction        string  // "long_squeeze" or "short_squeeze"
+	FundingRate      float64
+	FundingPercentile float64 // 0-1, historical percentile of funding rate
+	OIChange         float64 // % change in last 24h
+	LiqCluster       float64 // Price level with high liquidation risk
+	Confidence       float64 // 0-1
+	Timestamp        time.Time
 }
 
 // LiquidationDataClient provides market data for liquidation detection.
@@ -50,6 +51,14 @@ func (ls *LiquidationStrategy) ScanOpportunities(symbol string) (*LiquidationSig
 		return nil, fmt.Errorf("get funding rate: %w", err)
 	}
 
+	// Store funding rate for historical analysis
+	if err := ls.storeFundingRate(symbol, fundingInfo.FundingRate, fundingInfo.FundingTime); err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to store funding rate")
+	}
+
+	// Get funding rate percentile (90-day lookback)
+	fundingPercentile := ls.getFundingPercentile(symbol, fundingInfo.FundingRate, 90*24*time.Hour)
+
 	// Get OI change from database
 	oiChange, err := ls.getOIChange(symbol, 24*time.Hour)
 	if err != nil {
@@ -64,8 +73,8 @@ func (ls *LiquidationStrategy) ScanOpportunities(symbol string) (*LiquidationSig
 		longShortRatio = 1.0 // Neutral if unavailable
 	}
 
-	// Detect crowded positioning
-	signal := ls.detectCrowdedPositioning(symbol, fundingInfo.FundingRate, oiChange, longShortRatio)
+	// Detect crowded positioning with funding percentile
+	signal := ls.detectCrowdedPositioning(symbol, fundingInfo.FundingRate, fundingPercentile, oiChange, longShortRatio)
 	if signal == nil {
 		return nil, nil
 	}
@@ -78,17 +87,20 @@ func (ls *LiquidationStrategy) ScanOpportunities(symbol string) (*LiquidationSig
 
 	// Calculate liquidation clusters from OI distribution
 	signal.LiqCluster = ls.calculateLiquidationCluster(currentPrice, signal.Direction, longShortRatio)
+	signal.FundingPercentile = fundingPercentile
 	signal.Timestamp = time.Now()
 
 	return signal, nil
 }
 
-func (ls *LiquidationStrategy) detectCrowdedPositioning(symbol string, fundingRate, oiChange, longShortRatio float64) *LiquidationSignal {
+func (ls *LiquidationStrategy) detectCrowdedPositioning(symbol string, fundingRate, fundingPercentile, oiChange, longShortRatio float64) *LiquidationSignal {
 	// Long squeeze setup: High positive funding + rising OI + longs > shorts
+	// Funding percentile > 0.9 means funding is in top 10% historically (very high)
 	if fundingRate > ls.cfg.FundingThreshold && oiChange > ls.cfg.OIChangeThreshold && longShortRatio > 1.2 {
-		confidence := min(fundingRate/0.1, 1.0) * 0.5 + 
-			min(oiChange/50.0, 1.0) * 0.3 + 
-			min((longShortRatio-1.0)/0.5, 1.0) * 0.2
+		confidence := min(fundingRate/0.1, 1.0) * 0.4 +
+			min(oiChange/50.0, 1.0) * 0.25 +
+			min((longShortRatio-1.0)/0.5, 1.0) * 0.15 +
+			fundingPercentile * 0.20 // Higher percentile = more extreme funding = higher confidence
 		return &LiquidationSignal{
 			Symbol:      symbol,
 			Direction:   "long_squeeze",
@@ -99,10 +111,12 @@ func (ls *LiquidationStrategy) detectCrowdedPositioning(symbol string, fundingRa
 	}
 
 	// Short squeeze setup: High negative funding + rising OI + shorts > longs
+	// Funding percentile < 0.1 means funding is in bottom 10% historically (very negative)
 	if fundingRate < -ls.cfg.FundingThreshold && oiChange > ls.cfg.OIChangeThreshold && longShortRatio < 0.8 {
-		confidence := min(-fundingRate/0.1, 1.0) * 0.5 + 
-			min(oiChange/50.0, 1.0) * 0.3 + 
-			min((1.0-longShortRatio)/0.5, 1.0) * 0.2
+		confidence := min(-fundingRate/0.1, 1.0) * 0.4 +
+			min(oiChange/50.0, 1.0) * 0.25 +
+			min((1.0-longShortRatio)/0.5, 1.0) * 0.15 +
+			(1.0 - fundingPercentile) * 0.20 // Lower percentile = more negative funding = higher confidence
 		return &LiquidationSignal{
 			Symbol:      symbol,
 			Direction:   "short_squeeze",
@@ -190,5 +204,75 @@ func (ls *LiquidationStrategy) getOIChange(symbol string, period time.Duration) 
 	}
 
 	return ((newOI - oldOI) / oldOI) * 100, nil
+}
+
+// storeFundingRate stores a funding rate observation for historical analysis
+func (ls *LiquidationStrategy) storeFundingRate(symbol string, fundingRate float64, fundingTime time.Time) error {
+	// Create table if not exists
+	_, err := ls.db.Exec(`
+		CREATE TABLE IF NOT EXISTS funding_rates (
+			timestamp BIGINT,
+			symbol TEXT,
+			funding_rate REAL,
+			PRIMARY KEY (timestamp, symbol)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("create funding_rates table: %w", err)
+	}
+
+	// Insert funding rate
+	timestamp := fundingTime.UnixMilli()
+	_, err = ls.db.Exec(`
+		INSERT OR REPLACE INTO funding_rates (timestamp, symbol, funding_rate)
+		VALUES (?, ?, ?)
+	`, timestamp, symbol, fundingRate)
+	if err != nil {
+		return fmt.Errorf("insert funding rate: %w", err)
+	}
+
+	return nil
+}
+
+// getFundingPercentile calculates the historical percentile of the current funding rate
+// Returns 0.0-1.0 where 1.0 means funding is at all-time high (most extreme positive)
+func (ls *LiquidationStrategy) getFundingPercentile(symbol string, currentFunding float64, lookback time.Duration) float64 {
+	cutoff := time.Now().Add(-lookback).UnixMilli()
+
+	// Query historical funding rates
+	rows, err := ls.db.Query(`
+		SELECT funding_rate FROM funding_rates
+		WHERE symbol = ? AND timestamp >= ?
+	`, symbol, cutoff)
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to query funding history")
+		return 0.5 // Return neutral percentile on error
+	}
+	defer rows.Close()
+
+	var rates []float64
+	for rows.Next() {
+		var rate float64
+		if err := rows.Scan(&rate); err != nil {
+			continue
+		}
+		rates = append(rates, rate)
+	}
+
+	if len(rates) < 10 {
+		// Not enough history, return neutral percentile
+		return 0.5
+	}
+
+	// Calculate percentile: count how many historical rates are below current
+	countBelow := 0
+	for _, rate := range rates {
+		if rate < currentFunding {
+			countBelow++
+		}
+	}
+
+	percentile := float64(countBelow) / float64(len(rates))
+	return percentile
 }
 
