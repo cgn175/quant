@@ -19,10 +19,10 @@ import (
 type VolatilityRegime int
 
 const (
-	VolCalm VolatilityRegime = iota      // ATR% < 2%
-	VolNormal                            // ATR% 2-5%
-	VolElevated                          // ATR% 5-10%
-	VolExtreme                           // ATR% > 10%
+	VolCalm     VolatilityRegime = iota // ATR% < 2%
+	VolNormal                           // ATR% 2-5%
+	VolElevated                         // ATR% 5-10%
+	VolExtreme                          // ATR% > 10%
 )
 
 // String returns the string representation of the volatility regime
@@ -55,14 +55,14 @@ type Strategy struct {
 	metrics    *metrics.Metrics
 
 	// State
-	mu        sync.RWMutex
-	prices    map[string]float64
-	orders    map[string][]*execution.Order // symbol -> active orders
-	pending   map[string]*pendingRoundTrip  // symbol -> incomplete round trip
-	inventory map[string]float64            // symbol -> net inventory (positive = long)
-	returns   map[string]*ringBuffer        // symbol -> rolling returns for vol calc
+	mu         sync.RWMutex
+	prices     map[string]float64
+	orders     map[string][]*execution.Order // symbol -> active orders
+	pending    map[string]*pendingRoundTrip  // symbol -> incomplete round trip
+	inventory  map[string]float64            // symbol -> net inventory (positive = long)
+	returns    map[string]*ringBuffer        // symbol -> rolling returns for vol calc
 	orderBooks map[string]exchange.OrderBook // symbol -> latest order book snapshot
-	orderFlow  OrderFlowProvider              // optional, nil if not enabled
+	orderFlow  OrderFlowProvider             // optional, nil if not enabled
 
 	// Volatility regime tracking (BTC/ETH as market proxies)
 	btcPrices     *ringBuffer      // rolling window for BTC prices (ATR calc)
@@ -202,12 +202,12 @@ func NewStrategy(cfg config.MarketMakingConfig, client exchange.Client, executor
 		orderBooks: make(map[string]exchange.OrderBook),
 		orderFlow:  orderFlow,
 		// Volatility regime buffers
-		btcPrices: newRingBuffer(atrPeriod),
-		ethPrices: newRingBuffer(atrPeriod),
-		btcHighs:  newRingBuffer(atrPeriod),
-		btcLows:   newRingBuffer(atrPeriod),
-		ethHighs:  newRingBuffer(atrPeriod),
-		ethLows:   newRingBuffer(atrPeriod),
+		btcPrices:     newRingBuffer(atrPeriod),
+		ethPrices:     newRingBuffer(atrPeriod),
+		btcHighs:      newRingBuffer(atrPeriod),
+		btcLows:       newRingBuffer(atrPeriod),
+		ethHighs:      newRingBuffer(atrPeriod),
+		ethLows:       newRingBuffer(atrPeriod),
 		currentRegime: VolCalm,
 		lastRegime:    VolCalm,
 	}
@@ -484,17 +484,17 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 					depth = 20
 				}
 				imbalance = CalculateOrderBookImbalance(ob, depth)
-				
+
 				// Emit metric
 				if s.metrics != nil && s.metrics.MMOrderBookImbalance != nil {
 					s.metrics.MMOrderBookImbalance.WithLabelValues(sym).Set(imbalance)
 				}
-				
+
 				skewFactor := s.cfg.ImbalanceSkewFactor
 				if skewFactor <= 0 {
 					skewFactor = 0.5
 				}
-				
+
 				bidSpread, askSpread = AdjustSpreadForImbalance(spread, imbalance, skewFactor)
 			}
 		}
@@ -570,24 +570,24 @@ func (s *Strategy) refreshOrders(ctx context.Context) {
 			}
 		}
 
-		log.Info().
-			Str("symbol", sym).
-			Float64("mid_price", price).
-			Float64("reservation", reservationPrice).
-			Float64("bid", bidPrice).
-			Float64("ask", askPrice).
-			Float64("spread_pct", spread/price*100).
-			Float64("bid_spread_pct", bidSpread/price*100).
-			Float64("ask_spread_pct", askSpread/price*100).
-			Float64("imbalance", imbalance).
-			Float64("order_flow_skew", flowSkew).
-			Float64("inventory", inv).
-			Float64("volatility", vol).
-			Bool("buy_active", placeBuy).
-			Bool("sell_active", placeSell).
-			Str("vol_regime", regime.String()).
-			Float64("spread_multiplier", spreadMultiplier).
-			Msg("refreshed market making orders")
+		/*log.Info().
+		Str("symbol", sym).
+		Float64("mid_price", price).
+		Float64("reservation", reservationPrice).
+		Float64("bid", bidPrice).
+		Float64("ask", askPrice).
+		Float64("spread_pct", spread/price*100).
+		Float64("bid_spread_pct", bidSpread/price*100).
+		Float64("ask_spread_pct", askSpread/price*100).
+		Float64("imbalance", imbalance).
+		Float64("order_flow_skew", flowSkew).
+		Float64("inventory", inv).
+		Float64("volatility", vol).
+		Bool("buy_active", placeBuy).
+		Bool("sell_active", placeSell).
+		Str("vol_regime", regime.String()).
+		Float64("spread_multiplier", spreadMultiplier).
+		Msg("refreshed market making orders")*/
 	}
 }
 

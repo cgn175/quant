@@ -16,18 +16,18 @@ import (
 
 // LiquidationEvent represents a forced liquidation order
 type LiquidationEvent struct {
-	Symbol    string    `json:"s"`
-	Side      string    `json:"S"` // SELL or BUY
-	OrderType string    `json:"o"` // LIMIT or MARKET
-	TimeInForce string  `json:"f"` // IOC, FOK, GTX
-	Quantity  string    `json:"q"`
-	Price     string    `json:"p"`
-	AvgPrice  string    `json:"ap"`
-	OrderStatus string  `json:"X"` // FILLED
-	LastFilledQty string `json:"l"`
-	FilledQty   string   `json:"z"`
+	Symbol          string `json:"s"`
+	Side            string `json:"S"` // SELL or BUY
+	OrderType       string `json:"o"` // LIMIT or MARKET
+	TimeInForce     string `json:"f"` // IOC, FOK, GTX
+	Quantity        string `json:"q"`
+	Price           string `json:"p"`
+	AvgPrice        string `json:"ap"`
+	OrderStatus     string `json:"X"` // FILLED
+	LastFilledQty   string `json:"l"`
+	FilledQty       string `json:"z"`
 	LastFilledPrice string `json:"L"`
-	Time        int64    `json:"T"`
+	Time            int64  `json:"T"`
 }
 
 // OpenInterestData represents open interest for a symbol
@@ -39,13 +39,13 @@ type OpenInterestData struct {
 
 // LiquidationCollector collects liquidation and open interest data
 type LiquidationCollector struct {
-	db       *sql.DB
-	hubURL   string
-	symbols  []string
-	wsConn   *websocket.Conn
-	mu       sync.Mutex
-	ctx      context.Context
-	cancel   context.CancelFunc
+	db      *sql.DB
+	hubURL  string
+	symbols []string
+	wsConn  *websocket.Conn
+	mu      sync.Mutex
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 // NewLiquidationCollector creates a new liquidation data collector
@@ -60,7 +60,7 @@ func NewLiquidationCollector(dbPath string, hubURL string, symbols []string) (*L
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &LiquidationCollector{
 		db:      db,
 		hubURL:  hubURL,
@@ -74,10 +74,10 @@ func NewLiquidationCollector(dbPath string, hubURL string, symbols []string) (*L
 func (lc *LiquidationCollector) Start() error {
 	// Start liquidation WebSocket
 	go lc.startLiquidationStream()
-	
+
 	// Start open interest polling
 	go lc.startOpenInterestPolling()
-	
+
 	log.Info().Msg("Liquidation collector started")
 	return nil
 }
@@ -128,7 +128,7 @@ func (lc *LiquidationCollector) connectLiquidationWS() error {
 		url = "wss://fstream.binance.com/ws/!forceOrder@arr"
 		log.Info().Msg("Connecting directly to Binance liquidation stream")
 	}
-	
+
 	dialer := websocket.DefaultDialer
 	conn, _, err := dialer.Dial(url, nil)
 	if err != nil {
@@ -140,13 +140,12 @@ func (lc *LiquidationCollector) connectLiquidationWS() error {
 	lc.mu.Unlock()
 
 	log.Info().Str("url", url).Msg("Connected to liquidation stream")
-	
+
 	// If using hub, subscribe to liquidation stream
 	if lc.hubURL != "" {
 		subscribeMsg := map[string]interface{}{
-			"method": "SUBSCRIBE",
-			"params": []string{"!forceOrder@arr"},
-			"id":     1,
+			"action": "subscribe",
+			"stream": "!forceOrder@arr",
 		}
 		if err := conn.WriteJSON(subscribeMsg); err != nil {
 			return fmt.Errorf("subscribe to liquidation stream: %w", err)
@@ -175,21 +174,35 @@ func (lc *LiquidationCollector) connectLiquidationWS() error {
 }
 
 func (lc *LiquidationCollector) processLiquidationMessage(message []byte) error {
+	// Binance !forceOrder@arr format (via hub combined stream):
+	// {"stream":"!forceOrder@arr","data":{"e":"forceOrder","E":123,"o":{"s":"BTCUSDT","S":"SELL",...}}}
+	// The actual liquidation order fields are nested inside "o".
 	var wsMessage struct {
-		Stream string          `json:"stream"`
-		Data   LiquidationEvent `json:"data"`
+		Stream string `json:"stream"`
+		Data   struct {
+			Order LiquidationEvent `json:"o"`
+		} `json:"data"`
 	}
 
 	if err := json.Unmarshal(message, &wsMessage); err != nil {
-		return fmt.Errorf("unmarshal message: %w", err)
+		// Try raw format (direct Binance connection without hub wrapping)
+		var rawMessage struct {
+			Order LiquidationEvent `json:"o"`
+		}
+		if err2 := json.Unmarshal(message, &rawMessage); err2 != nil {
+			return fmt.Errorf("unmarshal message: %w", err)
+		}
+		wsMessage.Data.Order = rawMessage.Order
 	}
 
+	event := wsMessage.Data.Order
+
 	// Filter for our symbols
-	if !lc.isTargetSymbol(wsMessage.Data.Symbol) {
+	if !lc.isTargetSymbol(event.Symbol) {
 		return nil
 	}
 
-	return lc.storeLiquidation(wsMessage.Data)
+	return lc.storeLiquidation(event)
 }
 
 func (lc *LiquidationCollector) isTargetSymbol(symbol string) bool {
@@ -212,7 +225,7 @@ func (lc *LiquidationCollector) storeLiquidation(event LiquidationEvent) error {
 	avgPrice, _ := strconv.ParseFloat(event.AvgPrice, 64)
 	filledQty, _ := strconv.ParseFloat(event.FilledQty, 64)
 
-	_, err := lc.db.Exec(query, event.Time, event.Symbol, event.Side, 
+	_, err := lc.db.Exec(query, event.Time, event.Symbol, event.Side,
 		quantity, price, avgPrice, filledQty)
 	if err != nil {
 		return fmt.Errorf("insert liquidation: %w", err)
@@ -256,7 +269,7 @@ func (lc *LiquidationCollector) collectOpenInterest() {
 
 func (lc *LiquidationCollector) fetchOpenInterest(symbol string) error {
 	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", symbol)
-	
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)

@@ -304,6 +304,9 @@ func buildTrendConfig(cfg *config.Config) strategy.TrendConfig {
 		OIFilterEnabled:      cfg.Strategy.OIFilter.Enabled,
 		OIFilterZScoreThresh: cfg.Strategy.OIFilter.ZScoreThresh,
 		OIFilterLookback:     cfg.Strategy.OIFilter.Lookback,
+		// Time stop
+		TimeStopBars: cfg.Strategy.TimeStopBars,
+		TimeStopMinR: cfg.Strategy.TimeStopMinR,
 	}
 	return trendCfg
 }
@@ -502,7 +505,7 @@ func handleTrendTick(ctx context.Context, tick tickEvent, d TrendDeps) {
 	}
 
 	// 6. Log tick
-	logTrendTick(sym, candles, d)
+	//logTrendTick(sym, candles, d)
 }
 
 // calculateMarketVolScalar computes the market volatility scalar for position sizing.
