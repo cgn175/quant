@@ -65,8 +65,8 @@ func TestLiquidationStrategy_LongSqueeze(t *testing.T) {
 	// So old OI must be within first hour of the 24h window
 	now := time.Now()
 	oldTime := now.Add(-24*time.Hour + 30*time.Minute) // Within [cutoff, cutoff+3600)
-	insertOI(db, "BTCUSDT", oldTime.Unix(), 100.0)
-	insertOI(db, "BTCUSDT", now.Unix(), 130.0)
+	insertOI(db, "BTCUSDT", oldTime.UnixMilli(), 100.0)
+	insertOI(db, "BTCUSDT", now.UnixMilli(), 130.0)
 
 	client.On("GetFundingRate", "BTCUSDT").Return(&exchange.FundingRateInfo{
 		Symbol:      "BTCUSDT",
@@ -101,8 +101,8 @@ func TestLiquidationStrategy_ShortSqueeze(t *testing.T) {
 
 	now := time.Now()
 	oldTime := now.Add(-24*time.Hour + 30*time.Minute) // Within [cutoff, cutoff+3600)
-	insertOI(db, "ETHUSDT", oldTime.Unix(), 200.0)
-	insertOI(db, "ETHUSDT", now.Unix(), 260.0) // 30% increase
+	insertOI(db, "ETHUSDT", oldTime.UnixMilli(), 200.0)
+	insertOI(db, "ETHUSDT", now.UnixMilli(), 260.0) // 30% increase
 
 	client.On("GetFundingRate", "ETHUSDT").Return(&exchange.FundingRateInfo{
 		Symbol:      "ETHUSDT",

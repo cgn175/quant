@@ -165,14 +165,14 @@ func (ls *LiquidationStrategy) getLongShortRatio(symbol string) (float64, error)
 }
 
 func (ls *LiquidationStrategy) getOIChange(symbol string, period time.Duration) (float64, error) {
-	cutoff := time.Now().Add(-period).Unix()
+	cutoff := time.Now().Add(-period).UnixMilli()
 
 	var oldOI, newOI float64
 	err := ls.db.QueryRow(`
 		SELECT open_interest FROM open_interest
 		WHERE symbol = ? AND timestamp >= ? AND timestamp < ?
 		ORDER BY timestamp ASC LIMIT 1
-	`, symbol, cutoff, cutoff+3600).Scan(&oldOI)
+	`, symbol, cutoff, cutoff+3600000).Scan(&oldOI)
 	if err != nil {
 		return 0, err
 	}
