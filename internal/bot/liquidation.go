@@ -85,7 +85,11 @@ func RunLiquidation(ctx context.Context, cfg *config.Config) error {
 					}
 
 					// Parse funding rate from update
-					fundingRate, _ := strconv.ParseFloat(update.FundingRate, 64)
+					fundingRate, err := strconv.ParseFloat(update.FundingRate, 64)
+					if err != nil {
+						log.Error().Err(err).Str("funding_rate", update.FundingRate).Msg("failed to parse funding rate")
+						return
+					}
 					prom.LiqFundingRate.WithLabelValues(sym).Set(fundingRate)
 
 					// Trigger scan when funding rate updates
