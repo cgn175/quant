@@ -1,0 +1,49 @@
+# Đối thủ và phương án thay thế cho bot quant (vốn riêng < 1.000 USD)
+
+Research snapshot: 2026-09-22. Các con số giá/phí là thông tin trên trang chính thức tại thời điểm kiểm tra; cần xác nhận lại trong tài khoản, vì phí, sản phẩm và khả năng sử dụng có thể khác theo quốc gia, sản phẩm, cặp giao dịch, VIP tier và khuyến mại. Không dùng APR/ROI do nhà cung cấp quảng bá làm bằng chứng lợi nhuận đã kiểm toán.
+
+## So sánh nhanh
+
+| Phương án | Những gì nó tự động hóa / mức phù hợp với Plan D 4H | Phí phần mềm định kỳ | Chi phí giao dịch và vốn nhỏ | Nhận định cạnh tranh |
+|---|---|---:|---|---|
+| **Binance Trading Bots** | Spot Grid, Futures Grid, DCA, Auto-Invest, Rebalancing, TWAP/VP và Funding-Rate Arbitrage; dễ chạy vì nằm ngay trên sàn. Không cho phép đưa trực tiếp logic Donchian + EMA + ML tùy biến vào bot native (đây là giới hạn sản phẩm native, không phải giới hạn Binance API). | Không thấy phí bot riêng; Binance công bố đã bỏ *additional algo-related fees* cho các sản phẩm/cặp được hỗ trợ từ 2026-03-30. | Spot regular user: maker/taker **0,100%/0,100%**; dùng BNB còn **0,075%/0,075%**. Một vòng mua-bán toàn bộ 1.000 USD xấp xỉ 2,00 USD (hoặc 1,50 USD với BNB), chưa tính spread/slippage. Futures còn funding và rủi ro liquidation. | Đối thủ rẻ và vận hành đơn giản cho grid/DCA/arb. Marketplace có ROI/PNL nhưng Binance nói futures unmatched PNL và funding ở master account có thể không nằm trong số liệu; không coi đó là track record độc lập. |
+| **Pionex** | Bot tích hợp trong sàn: Grid, DCA, Rebalancing, Arbitrage… thuận tiện cho người không muốn vận hành server. Không phải môi trường tự do cho Plan D/ML; signal/webhook và sản phẩm cụ thể cần kiểm tra theo khu vực. | **Không có subscription/activation fee riêng** cho built-in bots theo bài giải thích chính thức; trả phí khi lệnh khớp. | Spot **0,050% maker/taker**; Futures **0,020% maker, 0,050% taker**. Hai chân spot trên 1.000 USD khoảng 1,00 USD trước spread; futures có funding. | Rất cạnh tranh về tổng chi phí cho grid/DCA vốn nhỏ, nhưng không chứng minh có edge trend-following. Phí/withdrawal/KYC có thể khác entity/khu vực; xác nhận rate hiển thị trong tài khoản. |
+| **3Commas** | DCA/Grid/Signal bot, Pine Script execution, webhook, multi-exchange; Starter chỉ spot, Pro/Expert có futures. Có thể dùng TradingView để phát tín hiệu nhưng vẫn là lớp orchestration bên ngoài. | **Starter $20/tháng hoặc $15/tháng khi thanh toán annual**; **Pro $50 hoặc $38**; **Expert $140 hoặc $105**. Free plan chỉ portfolio tracking, không trade thật; trial 7 ngày yêu cầu payment details. | Vẫn trả phí giao dịch của exchange, spread/slippage và funding; thêm subscription. Với vốn 1.000 USD, Starter tương đương **24%/năm** nếu trả tháng hoặc **18%/năm** annual, trước trading costs. | Tiện cho multi-exchange nhưng kinh tế kém ở vốn <1.000 USD trừ khi bot tạo alpha rất lớn; không nên so sánh gross return của 3Commas với Plan D mà quên subscription. |
+| **Freqtrade + FreqAI** | Mã nguồn mở Python, backtest/hyperopt/dry-run, Telegram/webUI; FreqAI hỗ trợ feature engineering, model retraining và nhiều mô hình ML. Đây là đối thủ gần nhất về khả năng tùy biến/ML. | **Miễn phí, open source**; không có subscription. Chi phí thật là máy chạy 24/7, bảo trì, dữ liệu và exchange fees. Tài liệu khuyến nghị Linux cloud tối thiểu khoảng 2 vCPU/2 GB RAM/1 GB disk (chi phí VPS phụ thuộc nhà cung cấp). | Freqtrade tính fees trong backtest; có thể truyền fee riêng và fee áp dụng cả entry/exit. Vẫn phải trả maker/taker, spread, funding/withdrawal ở sàn. | Có thể tái tạo nhiều thành phần Plan D với chi phí phần mềm thấp hơn, nhưng không có bằng chứng mặc định về lợi nhuận; Freqtrade khuyến nghị dry-run trước, và ví dụ FreqAI không dành cho production. |
+| **Hummingbot** | Framework open source cho CEX/DEX, connectors rộng; trọng tâm phổ biến là market making và arbitrage, có thể viết strategy/controller riêng. Phù hợp hơn nếu muốn nghiên cứu execution, MM hoặc cross-exchange hơn là bot trend 4H turnkey. | **Miễn phí, Apache 2.0**, chạy local/Docker; cloud/VPS là chi phí tùy chọn. | Giao dịch qua Hummingbot chịu nguyên phí maker/taker/withdrawal của exchange; cần tôn trọng minimum order size. DEX còn gas/LP/MEV/impermanent-loss tùy chiến lược. | Có năng lực execution rộng nhưng đòi hỏi kỹ thuật và giám sát cao; lợi thế phần mềm không đồng nghĩa lợi thế PnL. |
+| **Buy-and-hold BTC/ETH hoặc DCA/low-frequency rule** | Benchmark vốn: mua BTC/ETH (ví dụ 50/50) và giữ, hoặc rebalance tuần/tháng bằng rule đơn giản. Không cần ML, server hay subscription; phù hợp làm control đối chứng. | **0 USD phần mềm** nếu tự thực hiện; không có phí định kỳ. | Chỉ phát sinh phí/spread khi mua, bán hoặc rebalance; drawdown thị trường và beta vẫn chịu nguyên vẹn. Dùng fee Binance/Pionex thực tế để tính net return. | Đây là benchmark bắt buộc: Plan D chỉ đáng giữ độ phức tạp nếu vượt benchmark sau fees, slippage, drawdown và thời gian vận hành trong cùng giai đoạn out-of-sample. |
+
+## Tác động trực tiếp với vốn dưới 1.000 USD
+
+- Với vốn 1.000 USD, 3Commas Starter tháng là 20 USD/tháng = 2% vốn mỗi tháng; annual là 15 USD/tháng = 1,5%/tháng. Nếu vốn 500 USD, các tỷ lệ này tăng gấp đôi. Subscription phải được trừ trước khi kết luận bot có alpha.
+- Ở Binance regular spot, một round trip 1.000 USD (mua rồi bán cùng quy mô) tốn khoảng 0,20% = 2 USD trước spread/slippage. Ở Pionex standard spot là khoảng 0,10% = 1 USD. Tight grid hoặc strategy turnover cao sẽ tiêu phí rất nhanh.
+- Freqtrade/Hummingbot không có subscription nên có lợi thế chi phí, nhưng phải quy đổi thời gian vận hành, VPS, cập nhật exchange API, giám sát lỗi và rủi ro khóa API thành chi phí thực tế. Với số vốn nhỏ, một VPS rẻ vẫn có thể chiếm vài phần trăm đến hơn 10% vốn mỗi năm; hãy dùng hóa đơn thật thay vì giả định chung.
+- Các bot native kiểu grid/DCA không phải đối thủ trực tiếp về logic của Plan D; chúng là đối thủ về “kết quả ròng trên cùng vốn sau chi phí và công sức”. So sánh cần cùng sàn, cùng khoảng thời gian, cùng universe BTC/ETH/SOL/BNB và cùng quy tắc xử lý vốn nhàn rỗi.
+
+## Thiết kế benchmark để đánh giá bot của repo
+
+Chạy tối thiểu bốn nhánh trên cùng dữ liệu 4H và cùng phí thực tế: (1) Plan D hiện tại; (2) buy-and-hold BTC/ETH; (3) rule đơn giản EMA/Donchian không ML; (4) native Binance/Pionex grid hoặc DCA nếu có dữ liệu trade có thể audit. Báo cáo net PnL, CAGR, Sharpe/Sortino, max drawdown, time-under-water, turnover, fee/funding/slippage riêng, số giao dịch, độ nhạy tham số và kết quả walk-forward.
+
+Không dùng ảnh chụp ROI/leaderboard của marketplace làm proof: Binance nêu marketplace refresh theo giờ, chỉ hiển thị strategy đang chạy, và cách tính PNL giữa bot account/master account khác nhau. Với FreqAI/ML, mọi kết luận phải đến từ holdout theo thời gian, tránh leakage và có paper/live shadow period.
+
+Các gate tối thiểu: tách train/test và OOS theo thời gian; kiểm tra tín hiệu ở nến kế tiếp để loại look-ahead; đưa maker/taker, spread, slippage, funding và minimum order vào mô phỏng; theo dõi số trade (30 trade cũng chưa tự động đủ để kết luận có ý nghĩa thống kê; cần tính phụ thuộc và khoảng tin cậy); ghi lại toàn bộ thử nghiệm/parameter search để tránh multiple-testing bias; kiểm tra bull/bear/sideways và volatility regimes; xem Sharpe >3 là dấu hiệu cần audit, không phải thành tích mặc định. Nếu có thể, báo cáo confidence interval hoặc t-stat của lợi nhuận sau phí và haircut kỳ vọng khi chuyển từ backtest sang live.
+
+## Nguồn chính thức đã kiểm tra
+
+- [Binance Trading Bots landing page/marketplace](https://www.binance.com/en/support/faq/detail/f0c2bd5bc16c40b9998d22549e91cd1c) — các loại bot, ROI/PNL và giới hạn cách tính.
+- [Binance Futures Grid FAQ](https://www.binance.com/en/support/faq/detail/f4c453bab89648beb722aa26634120c3) — grid hợp thị trường sideway/volatile, trade-off tần suất và rủi ro.
+- [Binance Spot fee schedule](https://www.binance.com/en/fee/trading) — regular 0,100%/0,100%, BNB discount, volume bot tính vào VIP.
+- [Binance announcement: removal of additional algo fees](https://www.binance.com/en/support/announcement/detail/d51d8110eb4645278925193ee3d063fa) — áp dụng cho sản phẩm/cặp đủ điều kiện; có cảnh báo khu vực.
+- [Pionex fee schedule](https://www.pionexapp.com/en/fees) — spot/futures maker-taker và withdrawal/KYC table.
+- [Pionex: built-in bots have no separate subscription](https://www.pionex.com/blog/is-there-any-fees-for-starting-a-bot-or-only-transaction-fees/) — phí bot, trading fee, funding/spread/withdrawal caveats.
+- [3Commas pricing](https://3commas.io/pricing) — monthly/annual prices và giới hạn bot/API theo tier.
+- [3Commas subscription plan help](https://help.3commas.io/en/articles/8420093-available-subscription-plans) — free plan không trade thật, monthly prices, 7-day trial và exchange-feature caveat.
+- [Freqtrade docs](https://docs.freqtrade.io/en/stable/) — free/open source, backtest, dry-run và yêu cầu hạ tầng.
+- [Freqtrade backtesting](https://docs.freqtrade.io/en/stable/backtesting/) — fee handling, starting balance, hạn chế của backtest.
+- [FreqAI docs](https://www.freqtrade.io/en/stable/freqai/) — retraining/feature engineering và cảnh báo example không dành cho production.
+- [Hummingbot FAQ](https://hummingbot.org/faq/) — free software, exchange fees/minimum orders, connectors và vận hành local.
+- [Hummingbot official site](https://hummingbot.org/) — open-source Apache 2.0 framework và các thành phần client/API/Gateway.
+
+### Uncertainty cần giữ lại
+
+Giá 3Commas có currency/VAT/discount theo quốc gia; Pionex/Binance có entity và sản phẩm không khả dụng ở mọi khu vực; maker/taker, funding, spread, minimum order và withdrawal fee thay đổi. Các số trên dùng để lập mô hình chi phí, không phải báo giá hay cam kết lợi nhuận. Không nguồn chính thức nào trong tập này cung cấp audited net performance chứng minh một bot có alpha bền vững.

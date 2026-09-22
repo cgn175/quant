@@ -1,0 +1,130 @@
+{
+  "date": "2026-09-22",
+  "purpose": "Illustrative economics for own capital below USD 1000; not a return forecast or backtest",
+  "currency_assumption": "USD and USDT treated at par for illustration; depeg, FX and tax excluded",
+  "fixed_cost_hurdle_formula": "annual_return_hurdle_pct = 100 * annual_cost / starting_capital = 1200 * monthly_fixed_cost / starting_capital",
+  "fixed_cost_hurdles": [
+    {
+      "capital_usd": 250,
+      "monthly_fixed_cost_usd": 5,
+      "annual_cost_usd": 60,
+      "annual_return_hurdle_pct": 24.0
+    },
+    {
+      "capital_usd": 250,
+      "monthly_fixed_cost_usd": 10,
+      "annual_cost_usd": 120,
+      "annual_return_hurdle_pct": 48.0
+    },
+    {
+      "capital_usd": 250,
+      "monthly_fixed_cost_usd": 20,
+      "annual_cost_usd": 240,
+      "annual_return_hurdle_pct": 96.0
+    },
+    {
+      "capital_usd": 500,
+      "monthly_fixed_cost_usd": 5,
+      "annual_cost_usd": 60,
+      "annual_return_hurdle_pct": 12.0
+    },
+    {
+      "capital_usd": 500,
+      "monthly_fixed_cost_usd": 10,
+      "annual_cost_usd": 120,
+      "annual_return_hurdle_pct": 24.0
+    },
+    {
+      "capital_usd": 500,
+      "monthly_fixed_cost_usd": 20,
+      "annual_cost_usd": 240,
+      "annual_return_hurdle_pct": 48.0
+    },
+    {
+      "capital_usd": 1000,
+      "monthly_fixed_cost_usd": 5,
+      "annual_cost_usd": 60,
+      "annual_return_hurdle_pct": 6.0
+    },
+    {
+      "capital_usd": 1000,
+      "monthly_fixed_cost_usd": 10,
+      "annual_cost_usd": 120,
+      "annual_return_hurdle_pct": 12.0
+    },
+    {
+      "capital_usd": 1000,
+      "monthly_fixed_cost_usd": 20,
+      "annual_cost_usd": 240,
+      "annual_return_hurdle_pct": 24.0
+    }
+  ],
+  "funding_assumptions": {
+    "spot_allocation_pct": 40,
+    "futures_margin_cash_reserve_pct": 40,
+    "unallocated_cash_pct": 20,
+    "each_leg_notional_pct_of_total_capital": 40,
+    "funding_rate_per_8h": 0.0001,
+    "assumed_payments_per_day": 3,
+    "days": 365,
+    "assumed_spot_fee_per_fill": 0.001,
+    "assumed_futures_taker_fee_per_fill": 0.0005,
+    "round_trips_per_year": 1,
+    "monthly_fixed_cost_usd": 5,
+    "exclusions": [
+      "slippage",
+      "spread",
+      "basis change",
+      "funding sign or interval changes",
+      "liquidation costs",
+      "tax",
+      "depeg",
+      "time cost"
+    ],
+    "warning": "Constant funding and 8h intervals are scenario assumptions. Futures fee is an illustrative FAQ rate, not verified user commission. Margin reserve does not eliminate liquidation risk."
+  },
+  "funding_scenarios": [
+    {
+      "capital_usd": 500,
+      "spot_usd": 200.0,
+      "perp_short_notional_usd": 200.0,
+      "margin_cash_reserve_usd": 200.0,
+      "cash_usd": 100.0,
+      "annual_gross_funding_usd": 21.9,
+      "one_round_trip_fees_usd": 0.6,
+      "annual_fixed_cost_usd": 60,
+      "net_scenario_usd": -38.7,
+      "net_scenario_return_on_capital_pct": -7.74
+    },
+    {
+      "capital_usd": 1000,
+      "spot_usd": 400.0,
+      "perp_short_notional_usd": 400.0,
+      "margin_cash_reserve_usd": 400.0,
+      "cash_usd": 200.0,
+      "annual_gross_funding_usd": 43.8,
+      "one_round_trip_fees_usd": 1.2,
+      "annual_fixed_cost_usd": 60,
+      "net_scenario_usd": -17.4,
+      "net_scenario_return_on_capital_pct": -1.74
+    }
+  ],
+  "fee_sources": [
+    "https://www.binance.com/en/fee/trading",
+    "https://www.binance.com/en/support/faq/detail/360033544231",
+    "https://www.binance.com/en/support/faq/detail/360033525031"
+  ],
+  "basis_arithmetic": {
+    "source": "internal/strategy/basis_trade/strategy.go:175-204",
+    "implementation_formula": "annualized_basis = (1 + instantaneous_basis) ** (365 * 3) - 1",
+    "annualized_entry_threshold": 0.15,
+    "compounding_periods": 1095,
+    "entry_premium_bps": 1.2764462293657353,
+    "annualized_exit_threshold": 0.05,
+    "exit_premium_bps": 0.4455822023996525,
+    "captured_premium_bps_if_entry_and_exit_at_thresholds": 0.8308640269660827,
+    "illustrative_four_fill_round_trip_fee_bps": 30.0,
+    "warning": "A one-time perpetual premium is not a recurring return compounded 1095 times annually. No fixed maturity or guaranteed convergence. Fees are illustrative.",
+    "fee_bps_denominator": "Per-leg notional, not total account capital. With N/C=0.4, 30 bps of N is 12 bps of C."
+  }
+}
